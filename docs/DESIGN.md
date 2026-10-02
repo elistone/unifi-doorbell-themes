@@ -105,11 +105,30 @@ to the default rather than breaking.
 
 The upload route accepts up to **10 MB**, processes the image server-side into
 a 240×240 sprite sheet, and *then* enforces **under 1 MB on the processed
-output**. So a 4 MB GIF may well succeed. Do not validate against 1 MB
-client-side — you would reject files that work. Surface the controller's error
-instead.
+output**. So a 4 MB GIF may well succeed, and client-side validation against
+1 MB would reject files that work.
 
-A GIF upload produces two assets: the `.png` sprite and a `.png.gif` preview.
+**But the ceiling is not comfortable, and an early measurement here was
+misleading.** A synthetic 60-frame test pattern compressed 243 KB → 83 KB,
+which suggested real content would never come close. It does. Measured against
+an existing library on the same NVR:
+
+| Source | Stored sprite |
+|---|---|
+| `severance_marching_2.gif` | **995 KB** |
+| `stranger_things_ahoy.gif` | **932 KB** |
+| `dancing-bones.gif` | 396 KB |
+| `stitch_hi.gif` | 246 KB |
+
+Within half a percent of rejection. Real video has far more entropy than a
+test card. So **upload failure is a normal case, not an edge case** — the
+error needs to say which file, what size it came out at, and what to do
+(fewer frames, smaller palette). Transcoding moves from "only if necessary"
+to "probably necessary".
+
+A GIF upload produces **two** assets: the `.png` sprite and a `.png.gif`
+preview. Only the sprite is size-checked — one preview on that NVR is 1294 KB,
+comfortably over the limit the sprite must respect.
 
 ## Open — proceeding on these defaults, say if any is wrong
 
