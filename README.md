@@ -69,6 +69,22 @@ answer, so a dry run predicts exactly what the scheduler will do.
 Date windows wrap, so `12-20` to `01-05` means what you would expect. So do time
 windows: `22:00` to `06:00` crosses midnight.
 
+## Trying it without waiting for Christmas
+
+```bash
+node src/cli/probe.ts                                   # will this work at all?
+node src/cli/run.ts --dry-run                           # what would happen now
+node src/cli/run.ts --dry-run --at 2026-12-24T18:00     # what happens on Christmas Eve
+node src/cli/run.ts                                     # do it
+```
+
+`--at` only works alongside `--dry-run`: applying a theme for a pretend time
+would set the wrong thing right now.
+
+A dry run genuinely changes nothing — including not uploading. That matters
+more than it sounds, because a Protect upload is permanent and cannot be
+deleted without admin credentials.
+
 ## Development
 
 Requires Node 22.6+. There is no build step and no dependencies — Node strips
