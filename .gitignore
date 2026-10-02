@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.env
+.env.*
+!.env.example
+
+# Runtime state and the media library - never committed. The media is the
+# irreplaceable half and belongs in a backup, not in git.
+data/
+media/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
