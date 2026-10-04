@@ -6,8 +6,14 @@ node_modules/
 
 # Runtime state and the media library - never committed. The media is the
 # irreplaceable half and belongs in a backup, not in git.
-data/
-media/
+#
+# Anchored with a leading slash so they match only the top-level directories.
+# Unanchored, `media/` also matched `src/media/`, which silently kept
+# analyse.ts and transform.ts out of every commit - `check` and `fit` shipped
+# without the module they import, and a fresh clone could not run its own
+# tests, while `git status` stayed clean and said nothing was wrong.
+/data/
+/media/
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal
