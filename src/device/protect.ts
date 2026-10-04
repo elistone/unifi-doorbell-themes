@@ -19,6 +19,25 @@
  */
 
 /** Earliest version where /v1/files/animations and the IMAGE type are known good. */
+/**
+ * Ordinary requests are metadata reads against a local appliance, so 30s is
+ * already generous and a hang is worth surfacing quickly.
+ */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Uploads get their own, far longer budget, because this is the one request
+ * where the NVR does real work before replying: it tiles every frame into a
+ * sprite sheet and quantises the result to a 32-colour palette, on appliance
+ * hardware. An 88-frame GIF blew straight through 30s and reported
+ * "The operation was aborted due to timeout", which reads exactly like a
+ * rejected upload and is not one - the upload was still being processed.
+ *
+ * Frame count drives the cost, and the frame count that fits is capped near
+ * 120, so this is bounded work rather than something that can run away.
+ */
+const UPLOAD_TIMEOUT_MS = 300_000;
+
 const MINIMUM_PROTECT_VERSION = [6, 1];
 
 export interface ProtectOptions {
@@ -96,11 +115,11 @@ export class Protect {
     }
   }
 
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
     const response = await fetch(`${this.#base}${path}`, {
       ...init,
       headers: { "X-API-KEY": this.#apiKey, ...(init.headers ?? {}) },
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       throw new ProtectError(
@@ -112,8 +131,8 @@ export class Protect {
     return response;
   }
 
-  private async json<T>(path: string, init?: RequestInit): Promise<T> {
-    return (await this.request(path, init)).json() as Promise<T>;
+  private async json<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+    return (await this.request(path, init, timeoutMs)).json() as Promise<T>;
   }
 
   /**
@@ -221,6 +240,10 @@ export class Protect {
   async uploadAnimation(bytes: Uint8Array, filename: string, mimeType: string): Promise<AnimationAsset> {
     const form = new FormData();
     form.append("file", new Blob([bytes], { type: mimeType }), filename);
-    return this.json<AnimationAsset>("/files/animations", { method: "POST", body: form });
+    return this.json<AnimationAsset>(
+      "/files/animations",
+      { method: "POST", body: form },
+      UPLOAD_TIMEOUT_MS,
+    );
   }
 }
