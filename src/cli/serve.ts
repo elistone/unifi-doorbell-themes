@@ -8,6 +8,7 @@
  * the scheduled roll must not be able to disagree.
  */
 import { createServer } from "node:http";
+import { dirname, join } from "node:path";
 import { adopt, apply, reconcile } from "../apply.ts";
 import { DirectoryAssetSource, ProtectImageDevice, ProtectSoundDevice } from "../device/adapter.ts";
 import { PrivateApi } from "../device/private.ts";
@@ -31,7 +32,8 @@ const tickSeconds = Number(process.env.DOORMAN_TICK_SECONDS ?? 300);
 const rollHour = Number(process.env.DOORMAN_ROLL_HOUR ?? 4);
 
 const protect = new Protect({ host, apiKey, insecureTls: process.env.PROTECT_INSECURE_TLS !== "false" });
-const store = new Store(process.env.DOORMAN_DB ?? "data/doorman.sqlite");
+const dbPath = process.env.DOORMAN_DB ?? "data/doorman.sqlite";
+const store = new Store(dbPath);
 const device = new ProtectImageDevice(protect, cameraId);
 const source = new DirectoryAssetSource(process.env.DOORMAN_MEDIA ?? "media", protect);
 
@@ -128,6 +130,10 @@ const handle = createHandler({
   priv,
   cameraId,
   mediaDir: process.env.DOORMAN_MEDIA ?? "media",
+  // Beside the database rather than in the media library: these are
+  // derived files, and the media directory is the one thing here that
+  // cannot be regenerated.
+  cacheDir: process.env.DOORMAN_CACHE ?? join(dirname(dbPath), "thumbs"),
   protectVersion,
   defaultSound: process.env.DOORMAN_DEFAULT_RINGTONE,
   // Set when something terminates TLS in front of this - the app itself

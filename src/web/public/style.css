@@ -276,25 +276,90 @@ h3 { font-size: 14px; margin: 0 0 10px; color: var(--text-dim); font-weight: 600
 
 /* -------------------------------------------------------------- calendar */
 
-.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
-@media (max-width: 700px) { .cal { grid-template-columns: repeat(4, 1fr); } }
+.month + .month { margin-top: 26px; }
+
+.month-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+
+.cal {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.wd {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding-bottom: 2px;
+  text-align: center;
+}
+
+.pad { visibility: hidden; }
 
 .day {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 7px;
+  border-radius: 9px;
+  padding: 6px;
   background: var(--surface);
-  min-height: 74px;
+  min-height: 92px;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 4px;
   overflow: hidden;
 }
-.day .d { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
-.day .t { font-size: 12px; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
-.day.special { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
-.day.none .t { color: var(--text-faint); font-weight: 400; font-style: italic; }
+.day .d {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.day .chip {
+  width: 38px;
+  height: 38px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+.day .t {
+  font-size: 10.5px;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+}
+
+.day.weekend { background: var(--surface-2); }
+
+/* Seasonal themes beat the everyday rotation outright, so they are the
+   thing worth being able to spot at a glance down a year of cells. */
+.day.special {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.day.special .t { color: var(--text); font-weight: 600; }
+
+.day.none .t { color: var(--text-faint); }
 .day.today { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Four columns is the narrowest that still reads as a week; below that the
+   weekday alignment is worth more than the thumbnails. */
+@media (max-width: 640px) {
+  .day { min-height: 74px; }
+  .day .chip { width: 28px; height: 28px; }
+  .day .t { font-size: 9.5px; }
+}
 
 /* ----------------------------------------------------------------- forms */
 
@@ -544,7 +609,7 @@ input[type="password"] {
 .sk-tile .sk-img { aspect-ratio: 1; border-radius: 0; }
 .sk-tile .sk-body { padding: 11px; }
 
-.sk-day { min-height: 74px; border-radius: 8px; }
+.sk-day { min-height: 92px; border-radius: 9px; }
 
 /* The shimmer is decoration; for anyone who asked for less motion the plain
    block still communicates "not here yet". */
@@ -552,3 +617,26 @@ input[type="password"] {
   .sk::after { animation: none; }
   #progress .bar { animation: none; width: 100%; opacity: 0.6; }
 }
+
+/* ------------------------------------------------------ tile hover state */
+
+.tile .thumb { position: relative; }
+
+/* A hint that there is an animation behind the still, since the grid now
+   shows poster frames rather than 31 GIFs playing at once. */
+.tile .thumb .play {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.tile:hover .thumb .play { opacity: 0; }
+
+.theme img { object-fit: cover; }

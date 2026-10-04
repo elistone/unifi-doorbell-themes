@@ -20,6 +20,7 @@ import type { Rule, Theme } from "../domain/types.ts";
 import { analyseGif } from "../media/analyse.ts";
 import type { GifAnalysis } from "../media/analyse.ts";
 import { fitToLimit } from "../media/transform.ts";
+import { Thumbnailer } from "../media/thumbnail.ts";
 import { MAX_RINGTONES } from "../device/private.ts";
 import type { PrivateApi } from "../device/private.ts";
 import { Store } from "../store/db.ts";
@@ -49,6 +50,8 @@ export interface ApiDeps {
   sessionDigestOf: (req: IncomingMessage) => string | null;
   cameraId: string;
   mediaDir: string;
+  /** Where poster frames are cached. Regenerable, so losing it costs a decode. */
+  cacheDir: string;
   protectVersion: string;
   defaultSound?: string;
   /** Injected so the daemon's own roll bookkeeping stays in one place. */
@@ -175,6 +178,7 @@ function safeName(name: string): string {
 
 export function createApi(deps: ApiDeps) {
   const { store, device, source, sound, priv, cameraId, mediaDir } = deps;
+  const thumbnails = new Thumbnailer(deps.cacheDir);
 
   /**
    * Issue a session and hand the token back for the router to set as a
@@ -322,6 +326,12 @@ export function createApi(deps: ApiDeps) {
       const filename = safeName(name);
       if (!GIF_EXTENSIONS.has(extname(filename).toLowerCase())) {
         throw new HttpError(400, "Welcome images must be GIFs.");
+      }
+      // The name is a claim; the header is evidence. Checking it keeps a
+      // mislabelled file out of a directory everything else assumes is GIFs.
+      const magic = Buffer.from(bytes.slice(0, 6)).toString("latin1");
+      if (magic !== "GIF87a" && magic !== "GIF89a") {
+        throw new HttpError(400, `${filename} is named .gif but is not a GIF.`);
       }
       const files = await mediaIndex();
       const hash = hashBytes(bytes);
@@ -590,9 +600,45 @@ export function createApi(deps: ApiDeps) {
       // Content-addressed in practice: a changed GIF gets a changed name or
       // the user re-uploads. An hour is enough to make scrolling smooth.
       "Cache-Control": "private, max-age=3600",
+      // The bytes are user-uploaded, so do not let a browser decide for
+      // itself that they are something more interesting than an image.
+      "X-Content-Type-Options": "nosniff",
     });
     res.end(bytes);
   }
 
-  return { routes, serveMedia };
+  /**
+   * One still frame, for the grids.
+   *
+   * Falls back to the GIF itself when ffmpeg is missing or the file will
+   * not decode: a library that renders heavily beats a library of broken
+   * image icons, and the checker already reports unreadable files properly.
+   */
+  async function serveThumbnail(filename: string, res: ServerResponse): Promise<void> {
+    const name = safeName(filename);
+    const files = await source.localFiles();
+    const hash = [...files.entries()].find(([, f]) => f === name)?.[0];
+    if (!hash) throw new HttpError(404, `${name} is not in the media library.`);
+
+    let bytes: Buffer;
+    let type = "image/jpeg";
+    try {
+      bytes = await readFile(await thumbnails.ensure(hash, join(mediaDir, name)));
+    } catch {
+      bytes = await readFile(join(mediaDir, name));
+      type = "image/gif";
+    }
+
+    res.writeHead(200, {
+      "Content-Type": type,
+      "Content-Length": bytes.byteLength,
+      // A year: the URL carries the content hash, so these bytes can never
+      // stand for anything else.
+      "Cache-Control": "private, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.end(bytes);
+  }
+
+  return { routes, serveMedia, serveThumbnail };
 }

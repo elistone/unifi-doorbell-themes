@@ -5,6 +5,27 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **Poster-frame thumbnails** for the image library and theme list, cached
+  on disk and keyed by content hash — so a changed file is a different
+  thumbnail and nothing needs invalidating. The Images tab was pulling
+  47&nbsp;MB and decoding 31 animations at once. Hovering a tile still
+  plays the real GIF, and the Now panel always does.
+- Uploads are checked for the `GIF87a`/`GIF89a` header, not just a `.gif`
+  on the end of the name, and served media carries
+  `X-Content-Type-Options: nosniff`.
+
+### Changed
+
+- **The calendar is a calendar now.** Grouped by month with weekday
+  columns, so the days line up the way a wall calendar does — the old flat
+  run of cells could not answer "which day is that?", which is most of the
+  point. Each day shows a thumbnail of what would appear, weekends are
+  tinted, and seasonal themes stand out against the everyday rotation.
+- Switching tabs scrolls back to the top. Arriving at a new tab already
+  halfway down the previous one was disorienting on the two long ones.
+
 ## 0.2.2 - 2026-10-04
 
 ### Added

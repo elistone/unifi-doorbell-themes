@@ -61,7 +61,7 @@ export function createHandler(deps: RouterDeps) {
     return d ? store.sessionUser(d) : null;
   };
 
-  const { routes, serveMedia } = createApi({ ...deps, callerOf, sessionDigestOf });
+  const { routes, serveMedia, serveThumbnail } = createApi({ ...deps, callerOf, sessionDigestOf });
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -86,7 +86,13 @@ export function createHandler(deps: RouterDeps) {
         return;
       }
 
-      // Thumbnails: /media/<filename>
+      // One still frame, for the grids.
+      if (method === "GET" && url.pathname.startsWith("/thumb/")) {
+        await serveThumbnail(decodeURIComponent(url.pathname.slice("/thumb/".length)), res);
+        return;
+      }
+
+      // The animation itself, for where the animation is the point.
       if (method === "GET" && url.pathname.startsWith("/media/")) {
         await serveMedia(decodeURIComponent(url.pathname.slice("/media/".length)), res);
         return;

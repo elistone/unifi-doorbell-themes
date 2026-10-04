@@ -139,8 +139,12 @@ const skeletonTiles = (n) =>
     () => `<div class="sk-tile"><div class="sk sk-img"></div><div class="sk-body">${skLines(2)}</div></div>`,
   ).join("");
 
+// Wrapped in the same month/grid shell the real calendar uses, or the
+// placeholder is a flat column that collapses into a grid when data lands.
 const skeletonDays = (n) =>
-  Array.from({ length: n }, () => '<div class="sk sk-day"></div>').join("");
+  `<section class="month"><div class="sk sk-line" style="width:140px;height:15px;margin-bottom:10px"></div>
+    <div class="cal">${Array.from({ length: n }, () => '<div class="sk sk-day"></div>').join("")}</div>
+  </section>`;
 
 /**
  * Stops an older response for a tab overwriting a newer one.
@@ -181,6 +185,11 @@ function show(tab) {
     else button.removeAttribute("aria-current");
   }
   location.hash = tab;
+
+  // Back to the top. Arriving at a new tab already scrolled halfway down
+  // the previous one is disorienting, and the calendar and image grid are
+  // both long enough for it to happen constantly.
+  window.scrollTo({ top: 0, behavior: "instant" });
 
   // A renderer that throws would otherwise leave its skeleton shimmering
   // forever, which reads as "still loading" rather than "this failed".
@@ -267,6 +276,27 @@ async function renderNow() {
 const emptyState = (title, body) =>
   `<div class="empty-state"><strong>${esc(title)}</strong>${esc(body)}</div>`;
 
+/**
+ * Swap a poster frame for the real GIF on hover.
+ *
+ * Delegated from the document, so it keeps working across re-renders
+ * without rewiring, and the animation is only ever fetched for the tile
+ * someone is actually looking at. Loading all of them is what made this
+ * tab pull 47MB in the first place.
+ */
+document.addEventListener(
+  "mouseover",
+  (event) => {
+    const img = event.target.closest?.("img[data-animate]");
+    if (!img || img.dataset.animating) return;
+    img.dataset.animating = "1";
+    img.src = img.dataset.animate;
+  },
+  // Capture, because mouseover does not bubble usefully from every nested
+  // element otherwise.
+  true,
+);
+
 $("#apply-now").addEventListener("click", (e) =>
   withBusy(e.target, async () => {
     const result = await api("/api/apply", { method: "POST" });
@@ -347,7 +377,8 @@ async function renderThemes() {
     .map((theme) => {
       const sound = sounds.ringtones.find((r) => r.id === theme.sound);
       const thumb = theme.filename
-        ? `<img src="/media/${encodeURIComponent(theme.filename)}" alt="">`
+        ? `<img loading="lazy" alt="" src="/thumb/${encodeURIComponent(theme.filename)}"
+                data-animate="/media/${encodeURIComponent(theme.filename)}">`
         : `<div class="noimg">missing</div>`;
       return `
       <div class="theme ${theme.enabled ? "" : "off"}">
@@ -551,7 +582,11 @@ async function renderMedia() {
       const [kind, label] = VERDICT[m.verdict] ?? ["mute", "unreadable"];
       return `
       <div class="tile">
-        <div class="thumb"><img loading="lazy" src="/media/${encodeURIComponent(m.filename)}" alt=""></div>
+        <div class="thumb">
+          <img loading="lazy" alt="" src="/thumb/${encodeURIComponent(m.filename)}"
+               data-animate="/media/${encodeURIComponent(m.filename)}">
+          <span class="play" aria-hidden="true">▶</span>
+        </div>
         <div class="body">
           <div class="fname" title="${esc(m.filename)}">${esc(m.filename)}</div>
           <div class="facts">
@@ -700,6 +735,17 @@ $("#upload-sound").addEventListener("change", async (event) => {
 
 // ---------------------------------------------------------------- calendar
 
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/** Monday-first, matching how a wall calendar reads here. */
+const WEEK_START = 1;
+const WEEKDAY_HEADS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+const columnOf = (date) => (date.getDay() - WEEK_START + 7) % 7;
+
 async function renderCalendar() {
   const fresh = ticket("calendar");
   const from = $("#cal-from").value;
@@ -708,23 +754,64 @@ async function renderCalendar() {
 
   const data = await api(`/api/calendar?days=${days}${from ? `&from=${from}` : ""}`);
   if (!fresh()) return;
+
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-  $("#calendar").innerHTML = data
-    .map((d) => {
-      const [, month, day] = d.date.split("-");
-      const classes = [
-        "day",
-        d.priority > 0 ? "special" : "",
-        d.themeId ? "" : "none",
-        d.date === todayKey ? "today" : "",
-      ].join(" ");
-      return `
-      <div class="${classes}" title="${esc(d.date)}${d.themeName ? ` — ${esc(d.themeName)}` : ""}">
-        <div class="d">${month}/${day}</div>
-        <div class="t">${esc(d.themeName ?? "nothing")}</div>
+  // Group by month. A flat run of days was wrong in a way that is obvious
+  // once seen: the columns did not line up with weekdays, so a calendar
+  // whose whole job is answering "which day is that?" could not be read
+  // like one.
+  const months = new Map();
+  for (const day of data) {
+    const key = day.date.slice(0, 7);
+    if (!months.has(key)) months.set(key, []);
+    months.get(key).push(day);
+  }
+
+  const cell = (day) => {
+    const date = new Date(`${day.date}T12:00:00`);
+    const classes = [
+      "day",
+      day.priority > 0 ? "special" : "",
+      day.themeId ? "" : "none",
+      day.date === todayKey ? "today" : "",
+      [0, 6].includes(date.getDay()) ? "weekend" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    const art = day.filename
+      ? `<img class="chip" loading="lazy" alt="" src="/thumb/${encodeURIComponent(day.filename)}">`
+      : "";
+
+    return `
+      <div class="${classes}" title="${esc(day.date)}${day.themeName ? ` — ${esc(day.themeName)}` : " — nothing scheduled"}">
+        <div class="d">${date.getDate()}</div>
+        ${art}
+        <div class="t">${esc(day.themeName ?? "—")}</div>
       </div>`;
+  };
+
+  $("#calendar").innerHTML = [...months.entries()]
+    .map(([key, daysInMonth]) => {
+      const [year, month] = key.split("-").map(Number);
+      // Blank cells so the first day lands under its real weekday.
+      const lead = columnOf(new Date(`${daysInMonth[0].date}T12:00:00`));
+      const scheduled = daysInMonth.filter((d) => d.priority > 0).length;
+
+      return `
+        <section class="month">
+          <h3 class="month-name">
+            ${MONTHS[month - 1]} ${year}
+            ${scheduled > 0 ? `<span class="badge ok">${scheduled} seasonal</span>` : ""}
+          </h3>
+          <div class="cal">
+            ${WEEKDAY_HEADS.map((d) => `<div class="wd">${d}</div>`).join("")}
+            ${'<div class="pad"></div>'.repeat(lead)}
+            ${daysInMonth.map(cell).join("")}
+          </div>
+        </section>`;
     })
     .join("");
 }

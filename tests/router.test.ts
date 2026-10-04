@@ -1,6 +1,9 @@
 import { strict as assert } from "node:assert";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { createServer } from "node:http";
+import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "node:http";
 import { createHandler } from "../src/web/router.ts";
 import type { AssetSource, ImageDevice } from "../src/apply.ts";
@@ -42,6 +45,7 @@ class FakeSource implements AssetSource {
 let server: Server;
 let base: string;
 let store: Store;
+let mediaDir: string;
 
 // A fresh server per test rather than one shared across the file. The
 // shared version captured the store at construction time, so every test ran
@@ -49,13 +53,17 @@ let store: Store;
 // looked like auth bugs rather than a harness bug.
 beforeEach(async () => {
   store = new Store(":memory:");
+  // A real temp directory, so an upload test cannot write into the actual
+  // media library.
+  mediaDir = await mkdtemp(join(tmpdir(), "doorman-media-"));
 
   const handler = createHandler({
     store,
     device: new FakeDevice(),
     source: new FakeSource(),
     cameraId: "cam",
-    mediaDir: "media",
+    mediaDir,
+    cacheDir: await mkdtemp(join(tmpdir(), "doorman-thumbs-")),
     protectVersion: "7.2.105",
   } as never);
 
@@ -208,6 +216,71 @@ describe("login", () => {
 
     // And the lockout does not let the real password through either.
     assert.equal((await json("/api/login", GOOD)).status, 429);
+  });
+});
+
+describe("image upload", () => {
+  let cookie: string;
+
+  beforeEach(async () => {
+    cookie = cookieFrom(await json("/api/setup", GOOD));
+  });
+
+  const upload = async (name: string, bytes: Uint8Array) => {
+    const form = new FormData();
+    form.append("file", new Blob([bytes]), name);
+    return fetch(`${base}/api/media`, { method: "POST", headers: { cookie }, body: form });
+  };
+
+  it("refuses a file that is named .gif but is not one", async () => {
+    // The name is a claim, the header is evidence. Without this, anything
+    // at all lands in a directory the rest of the app assumes holds GIFs.
+    const response = await upload("evil.gif", new TextEncoder().encode("<html>not a gif"));
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /not a GIF/);
+    assert.deepEqual(await readdir(mediaDir), [], "a rejected upload must write nothing");
+  });
+
+  it("refuses a file that is not named .gif at all", async () => {
+    assert.equal((await upload("notes.txt", new Uint8Array([1]))).status, 400);
+  });
+
+  it("accepts real GIF bytes", async () => {
+    // Smallest thing that passes the header check; it never gets decoded.
+    const gif = new Uint8Array([...new TextEncoder().encode("GIF89a"), 1, 0, 1, 0, 0, 0, 0]);
+    const response = await upload("ok.gif", gif);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await readdir(mediaDir), ["ok.gif"]);
+  });
+
+  it("strips a path from the upload name rather than following it", async () => {
+    // The multipart layer applies basename() before anything touches the
+    // filesystem, so a path in the part's filename is normalised, not
+    // obeyed. What matters is that nothing lands outside mediaDir - a
+    // browser sending a path is clumsy, not necessarily an attack.
+    const gif = new Uint8Array([...new TextEncoder().encode("GIF89a"), 0]);
+    const response = await upload("../../escaped.gif", gif);
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).filename, "escaped.gif");
+    assert.deepEqual(await readdir(mediaDir), ["escaped.gif"], "it must land inside, flattened");
+  });
+});
+
+describe("thumbnails", () => {
+  let cookie: string;
+
+  beforeEach(async () => {
+    cookie = cookieFrom(await json("/api/setup", GOOD));
+  });
+
+  it("needs a session like everything else", async () => {
+    assert.equal((await fetch(`${base}/thumb/anything.gif`)).status, 401);
+  });
+
+  it("404s for a file that is not in the library", async () => {
+    const response = await fetch(`${base}/thumb/missing.gif`, { headers: { cookie } });
+    assert.equal(response.status, 404);
   });
 });
 
