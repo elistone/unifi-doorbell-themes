@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.3.1 - 2026-10-04
+
 ### Fixed
 
 - The calendar container still carried `class="cal"`, so the month sections
