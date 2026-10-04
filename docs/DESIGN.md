@@ -31,24 +31,63 @@ PATCH /proxy/protect/integration/v1/cameras/{id}
 Documented, versioned, API-key authenticated. Ubiquiti has only added to this
 surface — v6.1 to v7.2 gained 30 paths and removed none.
 
-**Sound — yes, but only via SSH if you want the ring itself to be your audio.**
+**Sound — yes, and no SSH is needed.** This was established by experiment, and
+it overturns what every existing project assumes.
 
-This is the caveat and it is structural, not a gap someone will fill. The
-doorbell's chime is produced *on the device* by `ubnt_sounds_leds`, fired by
-the firmware state `RING_BUTTON_PRESSED`. No controller round trip is
-involved. Anything pushed over the network therefore arrives **after** it —
-about 1–2 seconds, including roughly 0.9s of speaker warm-up.
+The doorbell's own speaker honours `speakerSettings.ringtoneId` on the private
+API. Verified on real hardware: setting it to a custom ringtone and pressing
+the button played that ringtone to the person at the door.
 
-There *is* an official network route (`POST /v1/cameras/{id}/talkback-session`,
-which Home Assistant ships as a `media_player` entity) and it works. It just
-cannot be the ring sound. Silencing the stock chime does not rescue it either:
-you get silence, then a gap, then audio, and the visitor does not know the
-button worked.
+```
+PATCH /proxy/protect/api/cameras/{id}
+      {"speakerSettings": {"ringtoneId": "<ringtone id>"}}
+```
 
-So: **ring replacement needs SSH.** The persistence problem is tractable —
-write to `/var/etc/persistent/sounds` and both the file and `ubnt_sounds_leds.conf`
-survive reboot. What does not survive is Protect reasserting its own state when
-the doorbell reconnects, which needs a drift check and an automatic re-apply.
+The PATCH **merges** — other fields in `speakerSettings` (`ringVolume`,
+`speakerVolume`, `repeatTimes`) survive untouched, so a ringtone change cannot
+clobber a volume someone set by hand.
+
+Why this was not obvious: every prior project reaches for SSH, and the one
+library that models `ringtone_id` on a camera ships **no setter for it**. The
+only ringtone selection anyone implements is `chime.ringSettings[].ringtoneId`,
+which the official spec describes as the *chime's* sound. The reasonable
+inference was that a camera's `ringtoneId` drives a paired chime. On the test
+system there are **zero chime devices**, so it cannot be doing that — and the
+button press confirmed it drives the doorbell's own speaker.
+
+So the SSH layer, the recovery codes, the bind-mounts, the reboot-revert
+problem and the drift re-apply daemon are all **gone**. That was the fragile
+half of the project and the reason to doubt it was shareable.
+
+### What that costs
+
+Sound lives on the **private** API, not the official one. Three consequences:
+
+- **Admin credentials are required, not optional.** A UniFi OS login, which is
+  materially more powerful than the read-scoped API key. Images still use the
+  API key; only sound needs the stronger credential.
+- **Sessions expire and the CSRF token rotates.** This bit during development:
+  a session captured minutes earlier returned 401. The client must re-login
+  and retry once on 401 rather than assuming a session persists.
+- **It breaks between major Protect releases.** 4.0 removed default doorbell
+  messages, 5.0 reworked chimes. Images should stay on the official API
+  precisely so that only half the app is exposed to that.
+
+### Ringtones are capped, unlike images
+
+Animations are uncapped. Ringtones are **not** — the controller's limit is 12,
+and uploads past it fail with an empty-bodied 400. The test system already has
+9 (4 stock, 5 custom), leaving roughly 3 free.
+
+So the two halves need different asset strategies, which is worth stating
+plainly because it is counter-intuitive:
+
+| | Images | Sounds |
+|---|---|---|
+| Cap | none | 12 total |
+| Upload | official API, API key | private API, admin login |
+| Delete | private API | private API |
+| Strategy | upload once, keep forever | upload once, **evict when full** |
 
 ## Settled decisions
 
@@ -137,9 +176,9 @@ comfortably over the limit the sprite must respect.
 | UI scope | Minimum + first-run setup (paste API key, pick camera from a list, test connection) |
 | Backup | Both: a homelab `backup-doorman.sh`, and an in-app export/import |
 | Display ownership | Advisory — a manual change in Protect sticks until the next roll; UI shows the drift |
-| Library deletion | Optional, behind a flag, needs separately-configured admin credentials |
-| Sound route | Ring replacement via SSH, with talkback as a documented fallback |
-| Build on `doorbell-mqtt-unifi`? | **No — standalone, informed by it.** The weakest of these defaults |
+| Library deletion | Supported. Admin credentials are needed for sound anyway, and DELETE is verified working |
+| ~~Sound route~~ | **Settled by experiment: `speakerSettings.ringtoneId`. No SSH.** |
+| ~~Build on `doorbell-mqtt-unifi`?~~ | **Moot — it exists to solve the SSH persistence problem we no longer have** |
 | Publishing | Publish, claiming G4 Doorbell Pro + SSH only |
 
 The `doorbell-mqtt-unifi` call deserves its reasoning recorded, because the

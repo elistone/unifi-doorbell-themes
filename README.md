@@ -15,8 +15,9 @@ Doorman adds:
 
 ## Status
 
-**Early.** The scheduling core is written and tested; the device layer is not
-finished. See [docs/DESIGN.md](docs/DESIGN.md) for what is decided and why.
+**Early, but the hard questions are answered.** Images and sounds are both
+proven working against real hardware; the scheduler and UI are not built yet.
+See [docs/DESIGN.md](docs/DESIGN.md) for what is decided and why.
 
 ## What you need, honestly
 
@@ -27,28 +28,30 @@ This is published in the hope it is useful, **not supported**. Before you start:
 - **Protect 6.1 or later.**
 - An **API key** for the welcome images — Protect → Settings → Control Plane →
   Integrations.
-- **SSH enabled on your console**, if you want custom ring sounds. See below,
-  because this is the part that deserves a clear-eyed decision.
+- A **UniFi OS admin login**, if you want custom ring sounds. Images need only
+  the API key; sound uses Protect's private API, which wants a real account.
 
 ## About the sound half
 
-Images go through Protect's official, documented Integration API. That part is
-stable and needs nothing unusual.
+Both halves work over HTTP. **No SSH, no recovery codes, no re-applying after
+a reboot** — which is what every other project in this space has to do.
 
-Ring sounds do not. The doorbell's chime is produced **on the device**, fired by
-firmware the instant the button is pressed — no controller involved. Anything
-sent over the network necessarily arrives 1–2 seconds later, which reads as a
-doorbell that pauses and then starts talking. There is an official network audio
-route (and Home Assistant ships it), but it cannot be the ring itself.
+The doorbell's own speaker honours `speakerSettings.ringtoneId`, so changing
+what a visitor hears is one API call. This was established by experiment
+rather than documentation: no library implements it, and the reasonable
+reading of the API is that a camera's `ringtoneId` drives a *paired chime*.
+On a system with no chime at all, setting it and pressing the button played
+the chosen sound at the door.
 
-So replacing the ring sound means SSH onto the doorbell, and a background check
-that re-applies it when Protect overwrites it — which it does whenever the
-doorbell reconnects. That re-apply takes about two seconds and is automatic, but
-it is a moving part, and it is the half most likely to break when Ubiquiti ships
-firmware.
+The cost is that sound lives on Protect's **private** API rather than the
+documented one, so it needs a **UniFi OS admin login** as well as the API key,
+and it is the half likely to break when Ubiquiti ships a major Protect
+release. Images stay on the official API precisely so that only half the app
+is exposed to that.
 
-**Images-only is a legitimate way to run this**, and it uses nothing but
-documented endpoints.
+One asymmetry worth knowing: **images are uncapped, sounds are limited to 12**
+on the controller. So the image library can grow freely, and the sound library
+needs evicting when it fills.
 
 ## How it decides
 
