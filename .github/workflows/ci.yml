@@ -24,13 +24,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # 24, matching the Dockerfile. Not a matrix: Node strips the
       # TypeScript itself and only does so without a flag from 23.6, so
       # older versions would not fail on a bug, they would fail on being
       # old. The Dockerfile pins the version that actually ships.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '24'
 
@@ -61,7 +61,7 @@ jobs:
     # Deployments build this image from a tag on the target host, so a
     # broken Dockerfile is not found until a deploy is already half done.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build
         run: docker build -t doorman:ci .

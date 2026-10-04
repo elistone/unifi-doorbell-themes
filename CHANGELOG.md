@@ -25,6 +25,8 @@ repo is a tag from this file, not a commit SHA.
 
 ### Fixed
 
+- Workflow actions pinned to `@v5`; `@v4` targets Node 20, which GitHub
+  has deprecated and now force-runs on 24 with a warning on every run.
 - `engines.node` said `>=22.6`, which the project could not honour: Node
   only strips TypeScript without a flag from **23.6**, and nothing here
   passes one. Corrected, and the container already shipped 24.
