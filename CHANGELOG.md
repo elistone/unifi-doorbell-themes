@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.2.2 - 2026-10-04
+
 ### Added
 
 - **GitHub Actions.** CI runs the tests, an import check and a Docker build
