@@ -464,3 +464,91 @@ input[type="password"] {
   background: var(--bg);
   color: var(--text);
 }
+
+/* ------------------------------------------------------------- progress */
+
+/* Indeterminate, because the server does not report progress and a bar that
+   invents a percentage is a lie that always stalls at 90%. */
+#progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 3px;
+  z-index: 200;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+#progress .bar {
+  height: 100%;
+  width: 36%;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+  animation: sweep 1.05s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+}
+@keyframes sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(380%); }
+}
+
+#booting {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+}
+
+.spin.big { width: 26px; height: 26px; border-width: 3px; }
+
+/* -------------------------------------------------------------- skeleton */
+
+/* Shapes the size of the content that is coming, so the layout does not
+   jump when it lands. The media tab is the one that needs this: ffprobe has
+   to decode every frame of every GIF to count them, which is seconds. */
+.sk {
+  background: var(--surface-2);
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.sk::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--text) 7%, transparent),
+    transparent
+  );
+  animation: shimmer 1.3s infinite;
+}
+@keyframes shimmer {
+  to { transform: translateX(100%); }
+}
+
+.sk-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 80px;
+  gap: 14px;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+.sk-row:last-child { border-bottom: 0; }
+.sk-thumb { width: 62px; height: 62px; border-radius: 8px; }
+.sk-line { height: 11px; }
+.sk-line + .sk-line { margin-top: 8px; }
+
+.sk-tile { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.sk-tile .sk-img { aspect-ratio: 1; border-radius: 0; }
+.sk-tile .sk-body { padding: 11px; }
+
+.sk-day { min-height: 74px; border-radius: 8px; }
+
+/* The shimmer is decoration; for anyone who asked for less motion the plain
+   block still communicates "not here yet". */
+@media (prefers-reduced-motion: reduce) {
+  .sk::after { animation: none; }
+  #progress .bar { animation: none; width: 100%; opacity: 0.6; }
+}

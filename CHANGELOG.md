@@ -5,6 +5,28 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- A thin progress bar at the top of the page during any request, driven by
+  a counter inside the one `api()` wrapper, so every call shows it without
+  each caller remembering to. Indeterminate, because the server does not
+  report progress and a bar that invents a percentage is a lie that always
+  stalls at 90%.
+- Skeleton placeholders for all six tabs, shaped like the content that is
+  coming so the layout does not jump when it lands. The Images tab needed
+  it most: ffprobe decodes every frame of every GIF to count them.
+- A spinner on the page while the first `/api/session` call is in flight.
+  On a cold container the page was blank long enough to look broken.
+- Spinners on the sign-in, create-account, save-theme and change-password
+  buttons, which also disable them against a double submit. Creating an
+  account is the slowest of these by design — scrypt is deliberately slow.
+- A render that fails now replaces its skeleton with an error, instead of
+  shimmering forever and reading as "still loading".
+
+### Changed
+
+- The account-creation username field no longer suggests a name.
+
 ## 0.2.0 - 2026-10-04
 
 ### Added

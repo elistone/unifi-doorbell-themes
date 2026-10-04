@@ -9,6 +9,16 @@
 </head>
 <body>
 
+<!-- Driven by the request counter in app.js, so every call shows it
+     without each caller remembering to. -->
+<div id="progress" hidden><div class="bar"></div></div>
+
+<!-- The page is blank until /api/session answers, and on a cold container
+     that is long enough to look broken. -->
+<div id="booting">
+  <div class="spin big"></div>
+</div>
+
 <!-- Shown until there is a session. The app markup below stays hidden
      rather than being rendered on demand, so there is one place the page
      structure lives and no duplicate login-only stylesheet. -->
@@ -25,7 +35,7 @@
       <label class="field">
         <span>Username</span>
         <input type="text" id="s-user" autocomplete="username" required
-               pattern="[A-Za-z0-9._\-]{2,64}" placeholder="eli">
+               pattern="[A-Za-z0-9._\-]{2,64}" autofocus>
       </label>
       <label class="field">
         <span>Password <span class="hint">— at least 10 characters</span></span>

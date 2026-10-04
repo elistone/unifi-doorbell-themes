@@ -35,9 +35,32 @@ function toast(message, kind = "") {
  * verbatim is the difference between "something went wrong" and "that GIF is
  * still used by a theme".
  */
+/**
+ * Requests in flight.
+ *
+ * A counter rather than a boolean: two overlapping calls would otherwise
+ * have the first to finish hide the bar while the second was still running.
+ */
+let inFlight = 0;
+
+function trackRequest(delta) {
+  inFlight = Math.max(0, inFlight + delta);
+  const bar = $("#progress");
+  if (bar) bar.hidden = inFlight === 0;
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
-  const text = await response.text();
+  trackRequest(1);
+  let response;
+  let text;
+  try {
+    response = await fetch(path, options);
+    text = await response.text();
+  } finally {
+    // In `finally`, so a network error does not leave the bar spinning
+    // forever with nothing behind it.
+    trackRequest(-1);
+  }
   let body = null;
   try {
     body = text ? JSON.parse(text) : null;
@@ -54,20 +77,35 @@ async function api(path, options = {}) {
   return body;
 }
 
-/** Run an async action with the button disabled and a spinner in it. */
-async function withBusy(button, fn) {
+/**
+ * Disable a button and put a spinner in it for the duration.
+ *
+ * Rethrows, so the caller decides how to report the failure - the gate
+ * forms show it in the card, everything else toasts it.
+ */
+async function busyWhile(button, fn) {
   const original = button.innerHTML;
   button.disabled = true;
   button.innerHTML = `<span class="spin"></span> ${original}`;
   try {
     return await fn();
-  } catch (error) {
-    toast(error.message, "bad");
   } finally {
     button.disabled = false;
     button.innerHTML = original;
   }
 }
+
+/** busyWhile, reporting any failure as a toast. */
+async function withBusy(button, fn) {
+  try {
+    return await busyWhile(button, fn);
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+/** The submit button of a form, for busyWhile. */
+const submitter = (form) => form.querySelector('button[type="submit"]');
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -84,6 +122,45 @@ const VERDICT = {
   borderline: ["warn", "borderline"],
   "likely-fails": ["bad", "too big"],
 };
+
+// -------------------------------------------------------------- skeletons
+
+const skLines = (n = 2) => Array.from({ length: n }, () => '<div class="sk sk-line"></div>').join("");
+
+const skeletonRows = (n) =>
+  Array.from(
+    { length: n },
+    () => `<div class="sk-row"><div class="sk sk-thumb"></div><div>${skLines(2)}</div><div class="sk sk-line"></div></div>`,
+  ).join("");
+
+const skeletonTiles = (n) =>
+  Array.from(
+    { length: n },
+    () => `<div class="sk-tile"><div class="sk sk-img"></div><div class="sk-body">${skLines(2)}</div></div>`,
+  ).join("");
+
+const skeletonDays = (n) =>
+  Array.from({ length: n }, () => '<div class="sk sk-day"></div>').join("");
+
+/**
+ * Stops an older response for a tab overwriting a newer one.
+ *
+ * Keyed per tab, which is the case that actually matters: leaving Images
+ * and coming back starts a second request while the first is still in
+ * flight, and Images runs ffprobe over the whole library so the two can
+ * easily land out of order. Each render takes a ticket and discards its
+ * result if another render of the same tab has started since.
+ *
+ * A render finishing while a DIFFERENT tab is showing is left alone - it
+ * paints into a hidden element and that tab re-renders when it is next
+ * opened, so there is nothing to protect against.
+ */
+const renderTickets = {};
+function ticket(name) {
+  const value = (renderTickets[name] ?? 0) + 1;
+  renderTickets[name] = value;
+  return () => renderTickets[name] === value;
+}
 
 // ------------------------------------------------------------------ state
 
@@ -104,8 +181,27 @@ function show(tab) {
     else button.removeAttribute("aria-current");
   }
   location.hash = tab;
-  RENDERERS[tab]?.();
+
+  // A renderer that throws would otherwise leave its skeleton shimmering
+  // forever, which reads as "still loading" rather than "this failed".
+  RENDERERS[tab]?.().catch((error) => {
+    toast(error.message, "bad");
+    const target = TAB_CONTENT[tab];
+    if (target) {
+      $(target).innerHTML = emptyState("Could not load this", error.message);
+    }
+  });
 }
+
+/** Where each tab's content goes, for the failure case above. */
+const TAB_CONTENT = {
+  themes: "#themes-list",
+  media: "#media-grid",
+  sounds: "#sounds-list",
+  calendar: "#calendar",
+  history: "#history",
+  now: "#now-panel",
+};
 
 // [data-tab] rather than every button in the nav: the account button lives
 // there too, and without the filter clicking it called show(undefined),
@@ -115,7 +211,13 @@ $$("nav button[data-tab]").forEach((b) => b.addEventListener("click", () => show
 // -------------------------------------------------------------- Now panel
 
 async function renderNow() {
+  const fresh = ticket("now");
+  $("#now-panel").innerHTML = `
+    <div class="sk" style="aspect-ratio:1;border-radius:var(--radius)"></div>
+    <div>${skLines(6)}</div>`;
+
   state = await api("/api/state");
+  if (!fresh()) return;
   $("#version").textContent = `v${state.version}`;
   if (state.username) $("#who").textContent = state.username;
 
@@ -222,8 +324,12 @@ $("#toggle-theme").addEventListener("click", () => {
 // ------------------------------------------------------------------ themes
 
 async function renderThemes() {
+  const fresh = ticket("themes");
+  $("#themes-list").innerHTML = skeletonRows(4);
+
   [themes, media] = await Promise.all([api("/api/themes"), api("/api/media")]);
   await loadSounds();
+  if (!fresh()) return;
 
   if (themes.length === 0) {
     $("#themes-list").innerHTML = emptyState(
@@ -396,11 +502,13 @@ $("#theme-form").addEventListener("submit", async (event) => {
   };
 
   try {
-    await api("/api/themes", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    await busyWhile(submitter($("#theme-form")), () =>
+      api("/api/themes", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
     $("#theme-dialog").close();
     toast(`Saved ${body.name}.`, "ok");
     await renderThemes();
@@ -426,7 +534,13 @@ $("#delete-theme").addEventListener("click", async () => {
 // ------------------------------------------------------------------- media
 
 async function renderMedia() {
+  const fresh = ticket("media");
+  // The slowest tab by far - ffprobe decodes every frame of every GIF to
+  // count them. Tiles the right shape keep the layout from jumping.
+  $("#media-grid").innerHTML = skeletonTiles(10);
+
   media = await api("/api/media");
+  if (!fresh()) return;
   if (media.length === 0) {
     $("#media-grid").innerHTML = emptyState("No images yet", "Upload a GIF to get started.");
     return;
@@ -516,7 +630,11 @@ async function loadSounds() {
 }
 
 async function renderSounds() {
+  const fresh = ticket("sounds");
+  $("#sounds-list").innerHTML = skeletonRows(5);
+
   await loadSounds();
+  if (!fresh()) return;
   if (sounds.unavailable) {
     $("#sounds-list").innerHTML = emptyState(
       "Ring sounds are unavailable",
@@ -583,9 +701,13 @@ $("#upload-sound").addEventListener("change", async (event) => {
 // ---------------------------------------------------------------- calendar
 
 async function renderCalendar() {
+  const fresh = ticket("calendar");
   const from = $("#cal-from").value;
   const days = $("#cal-days").value;
+  $("#calendar").innerHTML = skeletonDays(Math.min(Number(days), 63));
+
   const data = await api(`/api/calendar?days=${days}${from ? `&from=${from}` : ""}`);
+  if (!fresh()) return;
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
@@ -613,7 +735,11 @@ $("#cal-days").addEventListener("change", renderCalendar);
 // ----------------------------------------------------------------- history
 
 async function renderHistory() {
+  const fresh = ticket("history");
+  $("#history").innerHTML = `<tbody>${skeletonRows(5)}</tbody>`;
+
   const rows = await api("/api/applies?limit=100");
+  if (!fresh()) return;
   if (rows.length === 0) {
     $("#history").innerHTML = `<tbody><tr><td>${esc("Nothing has run yet.")}</td></tr></tbody>`;
     return;
@@ -644,6 +770,7 @@ function gateError(message) {
 }
 
 function showGate(mode = "login") {
+  $("#booting").hidden = true;
   $("#app").hidden = true;
   $("#gate").hidden = false;
   $("#setup-form").hidden = mode !== "setup";
@@ -653,6 +780,7 @@ function showGate(mode = "login") {
 }
 
 function showApp() {
+  $("#booting").hidden = true;
   $("#gate").hidden = true;
   $("#app").hidden = false;
 }
@@ -665,11 +793,15 @@ $("#setup-form").addEventListener("submit", async (event) => {
     return;
   }
   try {
-    await api("/api/setup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: $("#s-user").value.trim(), password: $("#s-pass").value }),
-    });
+    // scrypt is deliberately slow, so this is the one request where the
+    // wait is the feature working rather than something being wrong.
+    await busyWhile(submitter($("#setup-form")), () =>
+      api("/api/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: $("#s-user").value.trim(), password: $("#s-pass").value }),
+      }),
+    );
     showApp();
     await start();
     toast("Account created. You are signed in.", "ok");
@@ -682,11 +814,13 @@ $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   gateError("");
   try {
-    await api("/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: $("#l-user").value.trim(), password: $("#l-pass").value }),
-    });
+    await busyWhile(submitter($("#login-form")), () =>
+      api("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: $("#l-user").value.trim(), password: $("#l-pass").value }),
+      }),
+    );
     $("#l-pass").value = "";
     showApp();
     await start();
@@ -721,11 +855,13 @@ $("#password-form").addEventListener("submit", async (event) => {
     return;
   }
   try {
-    await api("/api/password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ current: $("#p-current").value, next: $("#p-next").value }),
-    });
+    await busyWhile(submitter($("#password-form")), () =>
+      api("/api/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current: $("#p-current").value, next: $("#p-next").value }),
+      }),
+    );
     $("#account-dialog").close();
     toast("Password changed. Other sessions have been signed out.", "ok");
   } catch (error) {
@@ -764,6 +900,7 @@ async function boot() {
     session = await api("/api/session");
   } catch {
     // The server is unreachable or broken. A login form would be a lie.
+    $("#booting").hidden = true;
     document.body.innerHTML =
       '<div class="empty-state"><strong>Doorman is not responding</strong>' +
       "The page loaded but the service behind it did not answer. Check the container.</div>";
