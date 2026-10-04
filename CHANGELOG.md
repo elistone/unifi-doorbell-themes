@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-04
+
 ### Added
 
 - **Accounts.** Doorman now has its own login instead of relying on a shared
