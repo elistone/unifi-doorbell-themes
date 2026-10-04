@@ -5,6 +5,30 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **GitHub Actions.** CI runs the tests, an import check and a Docker build
+  on every push to `main` and every pull request against it. A release
+  workflow publishes a GitHub release when a `v*` tag is pushed, using the
+  matching CHANGELOG section as the notes.
+- `scripts/check-imports.mjs` verifies every relative import in `src/`
+  resolves. Run against a fresh checkout it catches a file that exists
+  locally but was never committed — the bug that shipped `check` and `fit`
+  without the module they import.
+- `scripts/changelog-for.mjs` extracts one version's section, so release
+  notes and the changelog cannot drift apart.
+- `npm run check` for tests plus the import check.
+- The README now covers setup properly: getting the API key and camera id,
+  running from source, Docker and systemd, every environment variable,
+  reverse proxies, what to back up, and troubleshooting including how to
+  recover a lost account.
+
+### Fixed
+
+- `engines.node` said `>=22.6`, which the project could not honour: Node
+  only strips TypeScript without a flag from **23.6**, and nothing here
+  passes one. Corrected, and the container already shipped 24.
+
 ## 0.2.1 - 2026-10-04
 
 ### Added

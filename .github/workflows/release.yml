@@ -1,0 +1,59 @@
+---
+name: Release
+
+# Tags are what deployments pin to, so publishing a release is just making
+# the tag legible: the same notes the CHANGELOG already carries, on a page
+# people can link to.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish the release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Run before publishing anything. A tag that does not pass is a tag
+      # someone will deploy, and the release page would be the thing that
+      # convinced them it was safe.
+      - name: Tests
+        run: npm test
+
+      - name: Every import resolves
+        run: node scripts/check-imports.mjs
+
+      - name: The tag matches package.json
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          packaged="$(node -p "require('./package.json').version")"
+          if [ "$tagged" != "$packaged" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json ${packaged}."
+            echo "Use scripts/release.sh, which keeps them together."
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} matches package.json"
+
+      # From the CHANGELOG rather than from git log: the changelog is
+      # already written for a reader, a commit list is not. This fails when
+      # the section is missing, so a release cannot ship with empty notes.
+      - name: Collect the release notes
+        run: node scripts/changelog-for.mjs "${GITHUB_REF_NAME}" > release-notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            --verify-tag

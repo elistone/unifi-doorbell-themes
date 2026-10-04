@@ -5,9 +5,11 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=22.6"
+    "node": ">=23.6.0"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "check:imports": "node scripts/check-imports.mjs",
+    "check": "npm test && npm run check:imports"
   }
 }
