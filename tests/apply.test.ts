@@ -391,6 +391,40 @@ describe("sound", () => {
     );
   });
 
+  it("corrects the ringtone even when the image is already right", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    sound.current = "ringtone-haunted-mansion";
+    store.upsertTheme({ ...theme("everyday", "hash-a"), sound: "ringtone-stitch" });
+
+    // Put the device on the right image already, so the apply takes the
+    // skip-unchanged path. The sound half must still be reconciled: the two
+    // halves go through different APIs and drift independently, and an early
+    // return on the image alone meant a wrong ringtone was unrepairable.
+    await apply(store, device, source, now, {}, undefined, sound);
+    sound.current = "ringtone-haunted-mansion";
+    sound.writes = 0;
+
+    const result = await apply(store, device, source, now, {}, undefined, sound);
+    assert.equal(result.sound, "applied");
+    assert.equal(sound.current, "ringtone-stitch");
+    assert.match(result.reason, /ringtone corrected/);
+  });
+
+  it("reports unchanged when both halves are already right", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    store.upsertTheme({ ...theme("everyday", "hash-a"), sound: "ringtone-stitch" });
+
+    await apply(store, device, source, now, {}, undefined, sound);
+    sound.writes = 0;
+
+    const result = await apply(store, device, source, now, {}, undefined, sound);
+    assert.equal(result.outcome, "unchanged");
+    assert.equal(result.sound, "unchanged");
+    assert.equal(sound.writes, 0, "nothing to do means no writes to the device");
+  });
+
   it("prefers the theme's own sound over the default", async () => {
     source.add("hash-a");
     const sound = new FakeSound();

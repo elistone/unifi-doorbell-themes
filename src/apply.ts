@@ -102,6 +102,35 @@ export interface ApplyOptions {
   defaultSound?: string;
 }
 
+/**
+ * Point the doorbell's speaker at a ringtone, if there is one to set.
+ *
+ * Best-effort, and deliberately cannot fail the apply. It lives on the
+ * private API, which breaks between major Protect releases - so when it
+ * goes, the image half must carry on rather than the whole scheduler
+ * stopping. A doorbell showing the right picture with the wrong chime is a
+ * far better failure than one stuck on December's GIF in March.
+ *
+ * Shared by both apply paths on purpose. When this was inline on the
+ * image-was-written path only, an unchanged image skipped the sound
+ * entirely, so a wrong ringtone could never be repaired - the scheduler saw
+ * the right picture, called it unchanged and returned, every single day.
+ */
+async function setSound(
+  sound: SoundDevice | undefined,
+  wanted: string | undefined,
+): Promise<ApplyResult["sound"]> {
+  if (!wanted) return undefined;
+  if (!sound) return "skipped";
+  try {
+    if ((await sound.currentRingtone()) === wanted) return "unchanged";
+    await sound.setRingtone(wanted);
+    return "applied";
+  } catch {
+    return "failed";
+  }
+}
+
 export async function apply(
   store: Store,
   device: ImageDevice,
@@ -180,14 +209,31 @@ export async function apply(
         ? { expected, found: showing }
         : undefined;
 
+    // A theme with no sound of its own falls back to the default rather than
+    // keeping the last theme's - see defaultSound on ApplyOptions.
+    const wantedSound = theme.sound ?? defaultSound;
+
     if (skipUnchanged && showing === assetName) {
       if (!dryRun) store.setCursor(decision.cursor);
+
+      // The sound still has to be reconciled here. The image being right is
+      // no evidence the ringtone is: the two halves are set through different
+      // APIs and drift independently, and returning early on the image alone
+      // left a Schitt's Creek picture paired with the Halloween chime with
+      // nothing in the system able to notice or repair it.
+      const soundOutcome = dryRun ? undefined : await setSound(sound, wantedSound);
+      const soundChanged = soundOutcome === "applied";
+
       return finish({
-        outcome: "unchanged",
-        reason: `${decision.reason}; already showing it`,
+        outcome: soundChanged ? "applied" : "unchanged",
+        reason: soundChanged
+          ? `${decision.reason}; image already right, ringtone corrected`
+          : `${decision.reason}; already showing it`,
         themeId: theme.id,
         themeName: theme.name,
         assetName,
+        ringtoneId: wantedSound ?? null,
+        sound: soundOutcome,
         drift,
       });
     }
@@ -207,30 +253,7 @@ export async function apply(
     store.setLastAppliedAsset(assetName);
     store.setCursor(decision.cursor);
 
-    // Sound is best-effort and deliberately cannot fail the apply.
-    //
-    // It lives on the private API, which breaks between major Protect
-    // releases - so when it goes, the image half must carry on rather than
-    // the whole scheduler stopping. A doorbell showing the right picture with
-    // the wrong chime is a far better failure than one stuck on December's
-    // GIF in March.
-    // A theme with no sound of its own falls back to the default rather than
-    // keeping the last theme's - see defaultSound on ApplyOptions.
-    const wantedSound = theme.sound ?? defaultSound;
-    let soundOutcome: ApplyResult["sound"] = wantedSound ? "skipped" : undefined;
-    if (wantedSound && sound) {
-      try {
-        const current = await sound.currentRingtone();
-        if (current === wantedSound) {
-          soundOutcome = "unchanged";
-        } else {
-          await sound.setRingtone(wantedSound);
-          soundOutcome = "applied";
-        }
-      } catch {
-        soundOutcome = "failed";
-      }
-    }
+    const soundOutcome = await setSound(sound, wantedSound);
 
     return finish({
       outcome: "applied",
