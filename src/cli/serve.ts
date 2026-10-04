@@ -1,0 +1,132 @@
+/**
+ * The daemon. Rolls the theme once a day and answers a health check.
+ *
+ *   node src/cli/serve.ts
+ *
+ * This is what the container runs. It is a thin wrapper around the same
+ * `apply()` the CLI calls, deliberately - the preview, the manual trigger and
+ * the scheduled roll must not be able to disagree.
+ */
+import { createServer } from "node:http";
+import { adopt, apply, reconcile } from "../apply.ts";
+import { DirectoryAssetSource, ProtectImageDevice, ProtectSoundDevice } from "../device/adapter.ts";
+import { PrivateApi } from "../device/private.ts";
+import { Protect } from "../device/protect.ts";
+import { HttpNotifier } from "../notify.ts";
+import { Store } from "../store/db.ts";
+
+const host = process.env.PROTECT_HOST;
+const apiKey = process.env.PROTECT_API_KEY;
+const cameraId = process.env.PROTECT_CAMERA_ID;
+if (!host || !apiKey || !cameraId) {
+  console.error("Set PROTECT_HOST, PROTECT_API_KEY and PROTECT_CAMERA_ID. See .env.example.");
+  process.exit(1);
+}
+
+const port = Number(process.env.PORT ?? 8080);
+const tickSeconds = Number(process.env.DOORMAN_TICK_SECONDS ?? 300);
+/** Local hour to roll at. 4am by default: nobody is at the door. */
+const rollHour = Number(process.env.DOORMAN_ROLL_HOUR ?? 4);
+
+const protect = new Protect({ host, apiKey, insecureTls: process.env.PROTECT_INSECURE_TLS !== "false" });
+const store = new Store(process.env.DOORMAN_DB ?? "data/doorman.sqlite");
+const device = new ProtectImageDevice(protect, cameraId);
+const source = new DirectoryAssetSource(process.env.DOORMAN_MEDIA ?? "media", protect);
+
+const adminUser = process.env.PROTECT_ADMIN_USER;
+const adminPass = process.env.PROTECT_ADMIN_PASS;
+const sound =
+  adminUser && adminPass
+    ? new ProtectSoundDevice(new PrivateApi({ host, username: adminUser, password: adminPass }), cameraId)
+    : undefined;
+
+const notifier = process.env.NOTIFY_URL
+  ? new HttpNotifier({ url: process.env.NOTIFY_URL, method: process.env.NOTIFY_METHOD })
+  : undefined;
+
+const log = (message: string) => console.log(`[${new Date().toISOString()}] ${message}`);
+
+const version = await protect.assertSupportedVersion();
+log(`Protect ${version}, camera ${cameraId}, sound ${sound ? "enabled" : "disabled (no admin credentials)"}`);
+
+const claimed = await adopt(store, source);
+for (const { filename, assetName } of claimed) log(`adopted ${filename} -> ${assetName}`);
+
+/**
+ * Roll when the local DATE changes, not on a 24-hour timer.
+ *
+ * A setInterval(24h) daemon restarted at 23:00 every evening would never
+ * fire, and one restarted at noon would drift its roll time a little later
+ * each day. Comparing against the last rolled date is restart-proof, clock-
+ * change-proof, and catches up after downtime instead of silently skipping.
+ */
+async function tick(): Promise<void> {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+  if (store.lastRolledDate() === today) return;
+  // Wait for the roll hour, unless we have never rolled (fresh install should
+  // put something on the doorbell immediately rather than tomorrow morning).
+  if (store.lastRolledDate() !== null && now.getHours() < rollHour) return;
+
+  try {
+    const dropped = await reconcile(store, source);
+    for (const name of dropped) log(`forgot ${name} - no longer on the NVR`);
+
+    const result = await apply(store, device, source, now, {}, notifier, sound);
+    store.setLastRolledDate(today);
+    log(`${result.outcome}: ${result.reason}${result.sound ? ` [ringtone ${result.sound}]` : ""}`);
+    if (result.drift) {
+      log(`  drift: expected ${result.drift.expected}, device had ${result.drift.found} - left alone`);
+    }
+  } catch (error) {
+    // Do NOT record the date on failure, so the next tick retries rather than
+    // waiting until tomorrow.
+    const message = error instanceof Error ? error.message : String(error);
+    log(`roll failed: ${message}`);
+    await notifier?.post("down", `roll failed: ${message}`).catch(() => {});
+  }
+}
+
+/**
+ * The failure nobody notices: the daemon is up, the doorbell shows something
+ * plausible, and nothing has rolled for a week. Worth alarming on separately
+ * from errors, because no error occurred.
+ */
+async function checkForStall(): Promise<void> {
+  const last = store.recentApplies(1)[0];
+  if (!last) return;
+  const hoursSince = (Date.now() - new Date(last.at).getTime()) / 3_600_000;
+  if (hoursSince > 25) {
+    log(`WARNING: nothing applied for ${Math.floor(hoursSince)} hours`);
+    await notifier?.post("down", `no theme applied for ${Math.floor(hoursSince)} hours`).catch(() => {});
+  }
+}
+
+createServer((req, res) => {
+  if (req.url === "/health") {
+    const last = store.recentApplies(1)[0];
+    const healthy = !last || (Date.now() - new Date(last.at).getTime()) / 3_600_000 <= 25;
+    res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: healthy ? "ok" : "stalled", last: last ?? null }, null, 2));
+    return;
+  }
+  if (req.url === "/api/applies") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(store.recentApplies(50), null, 2));
+    return;
+  }
+  res.writeHead(404).end();
+}).listen(port, () => log(`listening on :${port}`));
+
+await tick();
+setInterval(() => void tick(), tickSeconds * 1000);
+setInterval(() => void checkForStall(), 3_600_000);
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    log(`${signal} - closing`);
+    store.close();
+    process.exit(0);
+  });
+}

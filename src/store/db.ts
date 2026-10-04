@@ -203,6 +203,21 @@ export class Store {
     this.#setValue("cursor", JSON.stringify(cursor));
   }
 
+  /**
+   * The local date of the last successful roll, as YYYY-MM-DD.
+   *
+   * A date rather than a timestamp, because the question the daemon asks is
+   * "have we rolled today", and that survives restarts, clock changes and
+   * downtime in a way "is it 24 hours since last time" does not.
+   */
+  lastRolledDate(): string | null {
+    return this.#value("lastRolledDate");
+  }
+
+  setLastRolledDate(date: string): void {
+    this.#setValue("lastRolledDate", date);
+  }
+
   /** The asset name we last successfully set, for skip-if-unchanged. */
   lastAppliedAsset(): string | null {
     return this.#value("lastAppliedAsset");
