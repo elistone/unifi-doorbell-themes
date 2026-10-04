@@ -798,13 +798,16 @@ async function renderCalendar() {
       const [year, month] = key.split("-").map(Number);
       // Blank cells so the first day lands under its real weekday.
       const lead = columnOf(new Date(`${daysInMonth[0].date}T12:00:00`));
+      // Days where something beats the everyday rotation. Not "seasonal":
+      // a Friday-night theme counts too, and calling it seasonal was wrong
+      // the moment one existed.
       const scheduled = daysInMonth.filter((d) => d.priority > 0).length;
 
       return `
         <section class="month">
           <h3 class="month-name">
             ${MONTHS[month - 1]} ${year}
-            ${scheduled > 0 ? `<span class="badge ok">${scheduled} seasonal</span>` : ""}
+            ${scheduled > 0 ? `<span class="badge ok">${scheduled} scheduled</span>` : ""}
           </h3>
           <div class="cal">
             ${WEEKDAY_HEADS.map((d) => `<div class="wd">${d}</div>`).join("")}

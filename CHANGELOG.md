@@ -5,6 +5,14 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Fixed
+
+- The calendar container still carried `class="cal"`, so the month sections
+  were laid out as items in a seven-column grid — each month squeezed to a
+  seventh of the width with the text wrapping one letter per line.
+- The per-month badge said "seasonal" while counting any prioritised theme,
+  including a Friday-night one. It says "scheduled" now.
+
 ## 0.3.0 - 2026-10-04
 
 ### Added

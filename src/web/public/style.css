@@ -353,8 +353,10 @@ h3 { font-size: 14px; margin: 0 0 10px; color: var(--text-dim); font-weight: 600
 .day.none .t { color: var(--text-faint); }
 .day.today { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* Four columns is the narrowest that still reads as a week; below that the
-   weekday alignment is worth more than the thumbnails. */
+/* Always seven columns, at every width. Reflowing to four would save space
+   and destroy the only thing a calendar is for - a column that is Tuesday
+   on a laptop and Friday on a phone is worse than a plain list. The cells
+   shrink instead. */
 @media (max-width: 640px) {
   .day { min-height: 74px; }
   .day .chip { width: 28px; height: 28px; }
