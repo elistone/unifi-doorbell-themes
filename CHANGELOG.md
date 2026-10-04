@@ -7,6 +7,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## 0.1.0 - 2026-10-04
 
+## 0.1.0 - 2026-10-04
+
 The first tagged release, and the first with a web UI.
 
 ### Added
