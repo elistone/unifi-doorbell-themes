@@ -14,6 +14,8 @@ import { PrivateApi } from "../device/private.ts";
 import { Protect } from "../device/protect.ts";
 import { HttpNotifier } from "../notify.ts";
 import { Store } from "../store/db.ts";
+import { VERSION } from "../version.ts";
+import { createHandler } from "../web/router.ts";
 
 const host = process.env.PROTECT_HOST;
 const apiKey = process.env.PROTECT_API_KEY;
@@ -35,10 +37,13 @@ const source = new DirectoryAssetSource(process.env.DOORMAN_MEDIA ?? "media", pr
 
 const adminUser = process.env.PROTECT_ADMIN_USER;
 const adminPass = process.env.PROTECT_ADMIN_PASS;
-const sound =
+// Held separately from the SoundDevice: the UI needs the raw private API to
+// list, upload and delete ringtones, which is more than applying one.
+const priv =
   adminUser && adminPass
-    ? new ProtectSoundDevice(new PrivateApi({ host, username: adminUser, password: adminPass }), cameraId)
+    ? new PrivateApi({ host, username: adminUser, password: adminPass })
     : undefined;
+const sound = priv ? new ProtectSoundDevice(priv, cameraId) : undefined;
 
 const notifier = process.env.NOTIFY_URL
   ? new HttpNotifier({ url: process.env.NOTIFY_URL, method: process.env.NOTIFY_METHOD })
@@ -46,8 +51,8 @@ const notifier = process.env.NOTIFY_URL
 
 const log = (message: string) => console.log(`[${new Date().toISOString()}] ${message}`);
 
-const version = await protect.assertSupportedVersion();
-log(`Protect ${version}, camera ${cameraId}, sound ${sound ? "enabled" : "disabled (no admin credentials)"}`);
+const protectVersion = await protect.assertSupportedVersion();
+log(`doorman ${VERSION} - Protect ${protectVersion}, camera ${cameraId}, sound ${sound ? "enabled" : "disabled (no admin credentials)"}`);
 
 const claimed = await adopt(store, source);
 for (const { filename, assetName } of claimed) log(`adopted ${filename} -> ${assetName}`);
@@ -111,20 +116,35 @@ async function checkForStall(): Promise<void> {
   }
 }
 
+const handle = createHandler({
+  store,
+  device,
+  source,
+  sound,
+  priv,
+  cameraId,
+  mediaDir: process.env.DOORMAN_MEDIA ?? "media",
+  protectVersion,
+  defaultSound: process.env.DOORMAN_DEFAULT_RINGTONE,
+  // An apply from the UI counts as today's roll, or the scheduler would roll
+  // again minutes later and overwrite what the person just chose.
+  onApplied: (date) => store.setLastRolledDate(date),
+});
+
 createServer((req, res) => {
+  // /health stays here rather than in the API module: it is the readiness
+  // probe Ansible and Uptime Kuma call, its status code is load-bearing, and
+  // it must keep answering even if the UI layer is broken.
   if (req.url === "/health") {
     const last = store.recentApplies(1)[0];
     const healthy = !last || (Date.now() - new Date(last.at).getTime()) / 3_600_000 <= 25;
     res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: healthy ? "ok" : "stalled", last: last ?? null }, null, 2));
+    res.end(
+      JSON.stringify({ status: healthy ? "ok" : "stalled", version: VERSION, last: last ?? null }, null, 2),
+    );
     return;
   }
-  if (req.url === "/api/applies") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(store.recentApplies(50), null, 2));
-    return;
-  }
-  res.writeHead(404).end();
+  void handle(req, res);
 }).listen(port, () => log(`listening on :${port}`));
 
 await tick();

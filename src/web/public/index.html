@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doorman</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔔</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="dot">🔔</span>
+    <span>Doorman</span>
+    <span class="version" id="version">—</span>
+  </div>
+  <nav>
+    <button data-tab="now" aria-current="page">Now</button>
+    <button data-tab="themes">Themes</button>
+    <button data-tab="media">Images</button>
+    <button data-tab="sounds">Sounds</button>
+    <button data-tab="calendar">Calendar</button>
+    <button data-tab="history">History</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ------------------------------------------------------------- Now -->
+  <section id="tab-now">
+    <h2>On the doorbell now</h2>
+    <p class="sub">What a visitor sees and hears when they press the button.</p>
+
+    <div class="card now" id="now-panel">
+      <div class="frame"><div class="empty">Loading…</div></div>
+      <div></div>
+    </div>
+
+    <div class="row" style="margin-top:16px">
+      <button class="btn primary" id="apply-now">Apply now</button>
+      <button class="btn" id="dry-run">Preview without changing</button>
+      <div class="spacer"></div>
+      <button class="btn small" id="toggle-theme" title="Switch light/dark">◐</button>
+    </div>
+
+    <div class="grid cols-2" style="margin-top:22px">
+      <div class="card">
+        <h3>Selection</h3>
+        <p class="sub" style="margin-bottom:12px">
+          How a day is picked when several themes tie on priority.
+        </p>
+        <select id="selection">
+          <option value="random">Random — a different one each day, stable within the day</option>
+          <option value="sequential">Sequential — straight through the list in order</option>
+        </select>
+      </div>
+      <div class="card" id="counts-card">
+        <h3>Library</h3>
+        <dl class="kv" id="counts"></dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- Themes -->
+  <section id="tab-themes" hidden>
+    <div class="row">
+      <div>
+        <h2>Themes</h2>
+        <p class="sub" style="margin:0">
+          A theme pairs an image with a sound and says when it applies.
+          Higher priority wins outright — it excludes everything below it.
+        </p>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn primary" id="new-theme">New theme</button>
+    </div>
+    <div class="card" style="margin-top:18px" id="themes-list"></div>
+  </section>
+
+  <!-- ----------------------------------------------------------- Media -->
+  <section id="tab-media" hidden>
+    <div class="row">
+      <div>
+        <h2>Welcome images</h2>
+        <p class="sub" style="margin:0">
+          The doorbell rebuilds every GIF into a 240×240 sprite and rejects it
+          if that comes out over 1&nbsp;MB. Frame count is what decides.
+        </p>
+      </div>
+      <div class="spacer"></div>
+      <label class="btn primary" for="upload-gif">Upload GIF</label>
+      <input type="file" id="upload-gif" accept="image/gif" hidden>
+    </div>
+    <div class="grid media" style="margin-top:18px" id="media-grid"></div>
+  </section>
+
+  <!-- ---------------------------------------------------------- Sounds -->
+  <section id="tab-sounds" hidden>
+    <div class="row">
+      <div>
+        <h2>Ring sounds</h2>
+        <p class="sub" style="margin:0">
+          What the doorbell's own speaker plays to the visitor.
+          <strong>The doorbell holds 12</strong>, so these are referenced by id
+          rather than kept forever like images.
+        </p>
+      </div>
+      <div class="spacer"></div>
+      <label class="btn primary" for="upload-sound">Upload sound</label>
+      <input type="file" id="upload-sound" accept="audio/*" hidden>
+    </div>
+    <div class="card" style="margin-top:18px" id="sounds-list"></div>
+  </section>
+
+  <!-- -------------------------------------------------------- Calendar -->
+  <section id="tab-calendar" hidden>
+    <h2>What's coming</h2>
+    <p class="sub">
+      Computed with the same rules the scheduler uses, so this is a real
+      answer to "will Christmas actually win?" rather than a guess.
+    </p>
+    <div class="row" style="margin-bottom:16px">
+      <label class="field" style="margin:0">
+        <span>From</span>
+        <input type="date" id="cal-from">
+      </label>
+      <label class="field" style="margin:0">
+        <span>Days</span>
+        <select id="cal-days">
+          <option value="28">28</option>
+          <option value="63" selected>63</option>
+          <option value="182">182</option>
+          <option value="364">a year</option>
+        </select>
+      </label>
+    </div>
+    <div class="cal" id="calendar"></div>
+  </section>
+
+  <!-- --------------------------------------------------------- History -->
+  <section id="tab-history" hidden>
+    <h2>History</h2>
+    <p class="sub">Every apply, and why. The answer to "why is it showing that".</p>
+    <div class="card"><table id="history"></table></div>
+  </section>
+</main>
+
+<!-- ------------------------------------------------------ theme editor -->
+<dialog id="theme-dialog">
+  <form method="dialog" id="theme-form">
+    <div class="head" id="theme-dialog-title">New theme</div>
+    <div class="content">
+      <label class="field">
+        <span>Name</span>
+        <input type="text" id="f-name" required placeholder="Christmas">
+      </label>
+      <label class="field">
+        <span>Id <span class="hint">— permanent, used in logs</span></span>
+        <input type="text" id="f-id" required pattern="[A-Za-z0-9_.\-]+" placeholder="christmas">
+      </label>
+      <label class="field">
+        <span>Image</span>
+        <select id="f-image" required></select>
+      </label>
+      <label class="field">
+        <span>Sound <span class="hint">— falls back to the default when unset</span></span>
+        <select id="f-sound"></select>
+      </label>
+      <label class="field">
+        <span>Priority <span class="hint">— higher excludes lower entirely</span></span>
+        <input type="number" id="f-priority" value="0" min="0" max="1000">
+      </label>
+      <label class="field">
+        <span><input type="checkbox" id="f-enabled" checked> Enabled</span>
+      </label>
+
+      <h3 style="margin-top:20px">When does it apply?</h3>
+      <div id="f-rules"></div>
+      <button type="button" class="btn small" id="add-rule">Add another window</button>
+    </div>
+    <div class="foot">
+      <button type="button" class="btn danger" id="delete-theme" hidden>Delete</button>
+      <div class="spacer"></div>
+      <button type="button" class="btn" id="cancel-theme">Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toasts"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

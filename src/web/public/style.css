@@ -1,0 +1,391 @@
+/* Doorman UI
+ *
+ * One stylesheet, custom properties for theming, no framework. The page is
+ * a handful of lists and a form; a framework would be more code than the
+ * thing it styles, and would need a build step the project does not have.
+ */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #dfe3e8;
+  --text: #1a1d21;
+  --text-dim: #5c6670;
+  --text-faint: #8a939c;
+  --accent: #2f6fed;
+  --accent-text: #ffffff;
+  --ok: #1c7c4a;
+  --ok-bg: #e4f4ea;
+  --warn: #8a5a00;
+  --warn-bg: #fdf1d8;
+  --bad: #b3261e;
+  --bad-bg: #fbe6e4;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171a;
+    --surface: #1c2024;
+    --surface-2: #23282d;
+    --border: #31373d;
+    --text: #e7eaed;
+    --text-dim: #a2abb4;
+    --text-faint: #767f88;
+    --accent: #6c9bff;
+    --accent-text: #0d1117;
+    --ok: #58d08b;
+    --ok-bg: #16301f;
+    --warn: #e5b45c;
+    --warn-bg: #332814;
+    --bad: #f28b82;
+    --bad-bg: #37201e;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14171a;
+  --surface: #1c2024;
+  --surface-2: #23282d;
+  --border: #31373d;
+  --text: #e7eaed;
+  --text-dim: #a2abb4;
+  --text-faint: #767f88;
+  --accent: #6c9bff;
+  --accent-text: #0d1117;
+  --ok: #58d08b;
+  --ok-bg: #16301f;
+  --warn: #e5b45c;
+  --warn-bg: #332814;
+  --bad: #f28b82;
+  --bad-bg: #37201e;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+/* `hidden` must actually hide.
+ *
+ * The UA stylesheet's `[hidden] { display: none }` loses to any rule that
+ * sets an explicit display - and `.btn` sets `inline-flex`, so the Delete
+ * button stayed visible on the new-theme dialog where nothing exists to
+ * delete. Anything toggled with `el.hidden` needs this to be reliable. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------- layout */
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { display: flex; align-items: baseline; gap: 10px; font-weight: 650; font-size: 16px; }
+.brand .dot { font-size: 18px; }
+.brand .version {
+  font: 500 11px/1 var(--mono);
+  color: var(--text-faint);
+  padding: 3px 6px;
+  background: var(--surface-2);
+  border-radius: 5px;
+}
+
+nav { display: flex; gap: 2px; margin-left: auto; flex-wrap: wrap; }
+
+nav button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-weight: 550;
+  padding: 7px 13px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+nav button:hover { background: var(--surface-2); color: var(--text); }
+nav button[aria-current="page"] { background: var(--accent); color: var(--accent-text); }
+
+main { max-width: 1120px; margin: 0 auto; padding: 24px 20px 80px; }
+
+section[hidden] { display: none !important; }
+
+h2 { font-size: 19px; margin: 0 0 4px; }
+h3 { font-size: 14px; margin: 0 0 10px; color: var(--text-dim); font-weight: 600; }
+.sub { color: var(--text-dim); margin: 0 0 20px; font-size: 14px; }
+
+/* ----------------------------------------------------------------- cards */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.grid { display: grid; gap: 16px; }
+.grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+.grid.media { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+
+/* ------------------------------------------------------------- now panel */
+
+.now {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 22px;
+  align-items: start;
+}
+@media (max-width: 620px) { .now { grid-template-columns: 1fr; } }
+
+.now .frame {
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+}
+.now .frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.now .frame .empty { color: var(--text-faint); font-size: 13px; text-align: center; padding: 16px; }
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; font-size: 14px; align-items: baseline; }
+.kv dt { color: var(--text-dim); }
+.kv dd { margin: 0; font-weight: 550; overflow-wrap: anywhere; }
+.kv dd.mono { font-family: var(--mono); font-size: 12.5px; font-weight: 400; color: var(--text-dim); }
+
+/* ---------------------------------------------------------------- badges */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 650;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge.bad { background: var(--bad-bg); color: var(--bad); }
+.badge.mute { background: var(--surface-2); color: var(--text-dim); }
+
+/* --------------------------------------------------------------- buttons */
+
+button.btn, a.btn {
+  appearance: none;
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+button.btn:hover, a.btn:hover { background: var(--surface-2); }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.btn.primary:hover { filter: brightness(1.08); }
+button.btn.danger { color: var(--bad); }
+button.btn.danger:hover { background: var(--bad-bg); }
+button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+button.btn.small { padding: 5px 10px; font-size: 13px; }
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+.spacer { flex: 1; }
+
+/* ----------------------------------------------------------- theme table */
+
+.theme {
+  display: grid;
+  grid-template-columns: 62px 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+.theme:last-child { border-bottom: 0; }
+.theme img, .theme .noimg {
+  width: 62px; height: 62px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  display: grid; place-items: center;
+  font-size: 11px; color: var(--text-faint); text-align: center;
+}
+.theme .name { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.theme .meta { color: var(--text-dim); font-size: 13px; margin-top: 3px; }
+.theme.off { opacity: 0.55; }
+
+/* ----------------------------------------------------------- media cards */
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.tile .thumb { aspect-ratio: 1; background: var(--surface-2); }
+.tile .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile .body { padding: 10px 11px; display: flex; flex-direction: column; gap: 7px; flex: 1; }
+.tile .fname {
+  font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tile .facts { font-size: 12px; color: var(--text-dim); display: flex; gap: 8px; flex-wrap: wrap; }
+.tile .acts { margin-top: auto; display: flex; gap: 6px; }
+
+/* -------------------------------------------------------------- calendar */
+
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+@media (max-width: 700px) { .cal { grid-template-columns: repeat(4, 1fr); } }
+
+.day {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px;
+  background: var(--surface);
+  min-height: 74px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+.day .d { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.day .t { font-size: 12px; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.day.special { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.day.none .t { color: var(--text-faint); font-weight: 400; font-style: italic; }
+.day.today { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ----------------------------------------------------------------- forms */
+
+label.field { display: block; margin-bottom: 13px; }
+label.field > span { display: block; font-size: 13px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
+label.field .hint { font-weight: 400; color: var(--text-faint); }
+
+input[type="text"], input[type="number"], input[type="date"], input[type="time"], select, textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+
+.weekdays { display: flex; gap: 5px; flex-wrap: wrap; }
+.weekdays label {
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg);
+}
+.weekdays input { display: none; }
+.weekdays label:has(input:checked) { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+
+.rule {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 13px;
+  margin-bottom: 10px;
+  background: var(--surface-2);
+}
+
+/* ---------------------------------------------------------------- dialog */
+
+dialog {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0;
+  max-width: 560px;
+  width: calc(100vw - 32px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+dialog .head { padding: 16px 18px; border-bottom: 1px solid var(--border); font-weight: 650; }
+dialog .content { padding: 18px; max-height: 65vh; overflow-y: auto; }
+dialog .foot { padding: 13px 18px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
+
+/* ---------------------------------------------------------------- tables */
+
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th {
+  text-align: left; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-faint);
+  padding: 0 10px 8px 0; font-weight: 650;
+}
+td { padding: 8px 10px 8px 0; border-top: 1px solid var(--border); vertical-align: top; }
+td.mono { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+
+/* --------------------------------------------------------------- toasts */
+
+#toasts {
+  position: fixed; bottom: 18px; right: 18px; z-index: 100;
+  display: flex; flex-direction: column; gap: 9px; max-width: min(430px, calc(100vw - 36px));
+}
+.toast {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 9px;
+  padding: 11px 14px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+  font-size: 14px;
+  animation: slide 0.18s ease-out;
+}
+.toast.bad { border-left-color: var(--bad); }
+.toast.ok { border-left-color: var(--ok); }
+@keyframes slide { from { opacity: 0; transform: translateX(14px); } }
+
+.empty-state { text-align: center; padding: 44px 20px; color: var(--text-dim); }
+.empty-state strong { display: block; font-size: 16px; color: var(--text); margin-bottom: 6px; }
+
+.spin { display: inline-block; width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: r 0.7s linear infinite; }
+@keyframes r { to { transform: rotate(360deg); } }
+
+/* Respect a user who has asked for less motion - the spinner is decorative
+   and the animated GIFs are the content, so only the spinner stops. */
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
+  .toast { animation: none; }
+}

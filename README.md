@@ -15,9 +15,10 @@ Doorman adds:
 
 ## Status
 
-**Early, but the hard questions are answered.** Images and sounds are both
-proven working against real hardware; the scheduler and UI are not built yet.
-See [docs/DESIGN.md](docs/DESIGN.md) for what is decided and why.
+**Working, and running on real hardware daily.** Images and sounds are both
+proven; the scheduler, the web UI and an Ansible deployment are built. It is
+still young enough that you should read [docs/DESIGN.md](docs/DESIGN.md)
+before trusting it with anything you care about.
 
 ## What you need, honestly
 
@@ -88,6 +89,21 @@ A dry run genuinely changes nothing — including not uploading. That matters
 more than it sounds, because a Protect upload is permanent and cannot be
 deleted without admin credentials.
 
+## The UI
+
+Browse to the service on its port and you get the whole thing: what is on the
+doorbell right now, a theme editor, the image library with a per-file verdict
+on whether Protect will accept it, ring sounds, and a **calendar preview** of
+what would show on each of the next N days.
+
+The calendar runs the same `decide()` the scheduler runs, so it is a real
+answer to "will Christmas actually win?" rather than a guess.
+
+Everything the UI does goes through the same functions the CLI uses. The UI is
+a client of the application, never a second implementation of it — the moment
+the button and the cron job can disagree about what "apply" means, one of them
+is wrong and nobody can tell which.
+
 ## Development
 
 Requires Node 22.6+. There is no build step and no dependencies — Node strips
@@ -96,6 +112,28 @@ the TypeScript itself.
 ```bash
 npm test
 ```
+
+### Releases
+
+Versions are tags, and tags are what deployments pin to:
+
+```bash
+scripts/release.sh minor      # 0.1.0 -> 0.2.0, runs the tests, commits, tags
+git push origin main --follow-tags
+```
+
+Then set `doorman_version: "v0.2.0"` wherever you deploy from. A tag rather
+than a commit SHA, so a rollback is a name you can read and reason about
+instead of seven hex digits you have to look up.
+
+The script refuses to tag a dirty tree or a branch other than `main`: a tag
+pointing at uncommitted work is a deployment nobody can reproduce, and you
+find out only when you try.
+
+Write changes into the `## Unreleased` section of
+[CHANGELOG.md](CHANGELOG.md) as you make them — the release script promotes
+that section to the new version. Reconstructing a changelog from `git log` at
+release time produces a list of commits, not a list of things that matter.
 
 The scheduling logic is a pure function of configuration and a timestamp, with
 no I/O anywhere near it. That is deliberate: it is where essentially every bug

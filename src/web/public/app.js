@@ -1,0 +1,651 @@
+/**
+ * Doorman UI.
+ *
+ * Plain modules, no framework and no build step - the same rule the server
+ * follows. The page is six lists and one form; everything here is fetch,
+ * template strings and one render function per tab.
+ */
+
+// ------------------------------------------------------------------ utils
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+/** Escape anything that came from the user or the device before it is HTML. */
+const esc = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
+
+const kb = (bytes) =>
+  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
+
+function toast(message, kind = "") {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.textContent = message;
+  $("#toasts").append(el);
+  setTimeout(() => el.remove(), kind === "bad" ? 9000 : 4500);
+}
+
+/**
+ * Every call goes through here so an error becomes a toast exactly once.
+ *
+ * The server puts a human-readable sentence in `error`; surfacing that
+ * verbatim is the difference between "something went wrong" and "that GIF is
+ * still used by a theme".
+ */
+async function api(path, options = {}) {
+  const response = await fetch(path, options);
+  const text = await response.text();
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(text.slice(0, 200) || `${response.status} ${response.statusText}`);
+  }
+  if (!response.ok) throw new Error(body?.error ?? `${response.status} ${response.statusText}`);
+  return body;
+}
+
+/** Run an async action with the button disabled and a spinner in it. */
+async function withBusy(button, fn) {
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.innerHTML = `<span class="spin"></span> ${original}`;
+  try {
+    return await fn();
+  } catch (error) {
+    toast(error.message, "bad");
+  } finally {
+    button.disabled = false;
+    button.innerHTML = original;
+  }
+}
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function describeRule(rule) {
+  const parts = [];
+  if (rule.dateWindow) parts.push(`${rule.dateWindow.from} → ${rule.dateWindow.to}`);
+  if (rule.weekdays?.length) parts.push(rule.weekdays.map((d) => DAY_NAMES[d]).join(", "));
+  if (rule.timeOfDay) parts.push(`${rule.timeOfDay.from}–${rule.timeOfDay.to}`);
+  return parts.join(" · ") || "always";
+}
+
+const VERDICT = {
+  safe: ["ok", "fits"],
+  borderline: ["warn", "borderline"],
+  "likely-fails": ["bad", "too big"],
+};
+
+// ------------------------------------------------------------------ state
+
+let state = null;
+let themes = [];
+let media = [];
+let sounds = { ringtones: [], limit: 12 };
+
+// ------------------------------------------------------------------- tabs
+
+const TABS = ["now", "themes", "media", "sounds", "calendar", "history"];
+
+function show(tab) {
+  for (const name of TABS) $(`#tab-${name}`).hidden = name !== tab;
+  for (const button of $$("nav button")) {
+    if (button.dataset.tab === tab) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+  location.hash = tab;
+  RENDERERS[tab]?.();
+}
+
+$$("nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
+
+// -------------------------------------------------------------- Now panel
+
+async function renderNow() {
+  state = await api("/api/state");
+  $("#version").textContent = `v${state.version}`;
+
+  const { showing, ringtone, today, last } = state;
+  const image = showing.filename
+    ? `<img src="/media/${encodeURIComponent(showing.filename)}" alt="">`
+    : `<div class="empty">${showing.assetName ? "On the doorbell, but not in this library" : "Nothing set"}</div>`;
+
+  const soundLine = !state.soundEnabled
+    ? `<span class="badge mute">no admin credentials</span>`
+    : ringtone.dangling
+      ? `<span class="badge bad">points at a ring sound that no longer exists</span>`
+      : esc(ringtone.name ?? "—");
+
+  const outcome = last
+    ? `<span class="badge ${last.outcome === "failed" ? "bad" : last.outcome === "no-theme" ? "warn" : "ok"}">${esc(last.outcome)}</span>`
+    : `<span class="badge mute">never run</span>`;
+
+  $("#now-panel").innerHTML = `
+    <div class="frame">${image}</div>
+    <div>
+      <dl class="kv">
+        <dt>Image</dt><dd>${esc(showing.filename ?? showing.assetName ?? "nothing")}</dd>
+        <dt>Sound</dt><dd>${soundLine}</dd>
+        <dt>Today's theme</dt><dd>${esc(today.themeName ?? "none eligible")}</dd>
+        <dt>Because</dt><dd class="mono">${esc(today.reason)}</dd>
+        <dt>Last run</dt><dd>${outcome} <span style="color:var(--text-dim);font-weight:400">${last ? esc(new Date(last.at).toLocaleString()) : ""}</span></dd>
+        <dt>Protect</dt><dd class="mono">${esc(state.protectVersion)} · camera ${esc(state.cameraId)}</dd>
+      </dl>
+    </div>`;
+
+  $("#counts").innerHTML = `
+    <dt>Themes</dt><dd>${state.counts.themes}</dd>
+    <dt>Images</dt><dd>${state.counts.media}</dd>
+    <dt>Ring sounds</dt><dd>${state.counts.ringtones} of ${state.counts.ringtoneLimit}</dd>`;
+
+  $("#selection").value = (await api("/api/selection")).selection;
+
+  if (state.counts.themes === 0) {
+    $("#themes-list").innerHTML = emptyState(
+      "No themes yet",
+      "Without one the scheduler leaves the doorbell alone. Create a theme to pair an image with a sound and a date window.",
+    );
+  }
+}
+
+const emptyState = (title, body) =>
+  `<div class="empty-state"><strong>${esc(title)}</strong>${esc(body)}</div>`;
+
+$("#apply-now").addEventListener("click", (e) =>
+  withBusy(e.target, async () => {
+    const result = await api("/api/apply", { method: "POST" });
+    toast(`${result.outcome}: ${result.reason}`, result.outcome === "failed" ? "bad" : "ok");
+    await renderNow();
+  }),
+);
+
+$("#dry-run").addEventListener("click", (e) =>
+  withBusy(e.target, async () => {
+    const result = await api("/api/apply?dryRun=true", { method: "POST" });
+    toast(`${result.outcome}: ${result.reason}`);
+  }),
+);
+
+$("#selection").addEventListener("change", async (e) => {
+  try {
+    await api("/api/selection", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selection: e.target.value }),
+    });
+    toast(`Selection is now ${e.target.value}.`, "ok");
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+});
+
+// --------------------------------------------------------------- dark mode
+
+const THEME_KEY = "doorman-theme";
+try {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved) document.documentElement.dataset.theme = saved;
+} catch {
+  // Private window or blocked storage. The OS preference still applies.
+}
+$("#toggle-theme").addEventListener("click", () => {
+  // Flip the EFFECTIVE theme, not the attribute. With no explicit choice
+  // stored the attribute is absent and the OS decides, so reading the
+  // attribute alone made the first click set "dark" on an already-dark page
+  // and appear to do nothing.
+  const current =
+    document.documentElement.dataset.theme ??
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = current === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    // Not worth telling anyone about - the toggle still worked for this view.
+  }
+});
+
+// ------------------------------------------------------------------ themes
+
+async function renderThemes() {
+  [themes, media] = await Promise.all([api("/api/themes"), api("/api/media")]);
+  await loadSounds();
+
+  if (themes.length === 0) {
+    $("#themes-list").innerHTML = emptyState(
+      "No themes yet",
+      "Without one the scheduler leaves the doorbell alone.",
+    );
+    return;
+  }
+
+  const sorted = [...themes].sort(
+    (a, b) => b.priority - a.priority || a.name.localeCompare(b.name),
+  );
+
+  $("#themes-list").innerHTML = sorted
+    .map((theme) => {
+      const sound = sounds.ringtones.find((r) => r.id === theme.sound);
+      const thumb = theme.filename
+        ? `<img src="/media/${encodeURIComponent(theme.filename)}" alt="">`
+        : `<div class="noimg">missing</div>`;
+      return `
+      <div class="theme ${theme.enabled ? "" : "off"}">
+        ${thumb}
+        <div>
+          <div class="name">
+            ${esc(theme.name)}
+            ${theme.priority > 0 ? `<span class="badge mute">priority ${theme.priority}</span>` : ""}
+            ${theme.enabled ? "" : `<span class="badge mute">disabled</span>`}
+            ${theme.missing ? `<span class="badge bad">image missing</span>` : ""}
+          </div>
+          <div class="meta">
+            ${esc(theme.rules.map(describeRule).join("  or  "))}
+            · ${sound ? esc(sound.name) : theme.sound ? `<span style="color:var(--bad)">sound missing</span>` : "default sound"}
+          </div>
+        </div>
+        <button class="btn small" data-edit="${esc(theme.id)}">Edit</button>
+      </div>`;
+    })
+    .join("");
+
+  $$("[data-edit]").forEach((b) =>
+    b.addEventListener("click", () => openTheme(themes.find((t) => t.id === b.dataset.edit))),
+  );
+}
+
+$("#new-theme").addEventListener("click", () => openTheme(null));
+
+// -------------------------------------------------------- theme edit form
+
+let editing = null;
+
+function ruleRow(rule = {}) {
+  const checked = (d) => (rule.weekdays?.includes(d) ? "checked" : "");
+  return `
+  <div class="rule">
+    <label class="field">
+      <span>Date window <span class="hint">— MM-DD, wraps across new year</span></span>
+      <div class="row">
+        <input type="text" class="r-from" placeholder="12-01" pattern="\\d{2}-\\d{2}" value="${esc(rule.dateWindow?.from ?? "")}" style="flex:1">
+        <span style="color:var(--text-dim)">to</span>
+        <input type="text" class="r-to" placeholder="12-26" pattern="\\d{2}-\\d{2}" value="${esc(rule.dateWindow?.to ?? "")}" style="flex:1">
+      </div>
+    </label>
+    <label class="field">
+      <span>Weekdays <span class="hint">— none means every day</span></span>
+      <div class="weekdays">
+        ${DAY_NAMES.map((n, d) => `<label><input type="checkbox" class="r-day" value="${d}" ${checked(d)}>${n}</label>`).join("")}
+      </div>
+    </label>
+    <label class="field" style="margin-bottom:0">
+      <span>Time of day <span class="hint">— wraps past midnight</span></span>
+      <div class="row">
+        <input type="time" class="r-tfrom" value="${esc(rule.timeOfDay?.from ?? "")}" style="flex:1">
+        <span style="color:var(--text-dim)">to</span>
+        <input type="time" class="r-tto" value="${esc(rule.timeOfDay?.to ?? "")}" style="flex:1">
+      </div>
+    </label>
+    <div class="row end" style="margin-top:9px">
+      <button type="button" class="btn small danger r-del">Remove window</button>
+    </div>
+  </div>`;
+}
+
+function wireRuleButtons() {
+  $$(".r-del").forEach((b) =>
+    b.addEventListener("click", () => {
+      // Always leave one. A theme with no rules can never match, which looks
+      // like a bug rather than a choice.
+      if ($$("#f-rules .rule").length === 1) {
+        toast("A theme needs at least one window. Leave it blank for 'always'.");
+        return;
+      }
+      b.closest(".rule").remove();
+    }),
+  );
+}
+
+function openTheme(theme) {
+  editing = theme;
+  $("#theme-dialog-title").textContent = theme ? `Edit ${theme.name}` : "New theme";
+  $("#f-name").value = theme?.name ?? "";
+  $("#f-id").value = theme?.id ?? "";
+  $("#f-id").disabled = Boolean(theme);
+  $("#f-priority").value = theme?.priority ?? 0;
+  $("#f-enabled").checked = theme ? theme.enabled : true;
+  $("#delete-theme").hidden = !theme;
+
+  $("#f-image").innerHTML = media
+    .map((m) => {
+      const [, label] = VERDICT[m.verdict] ?? ["", "unknown"];
+      return `<option value="${esc(m.filename)}" ${m.filename === theme?.filename ? "selected" : ""}>${esc(m.filename)} — ${esc(label)}</option>`;
+    })
+    .join("");
+
+  $("#f-sound").innerHTML =
+    `<option value="">Default ring sound</option>` +
+    sounds.ringtones
+      .map((r) => `<option value="${esc(r.id)}" ${r.id === theme?.sound ? "selected" : ""}>${esc(r.name)}</option>`)
+      .join("");
+
+  $("#f-rules").innerHTML = (theme?.rules?.length ? theme.rules : [{}]).map(ruleRow).join("");
+  wireRuleButtons();
+  $("#theme-dialog").showModal();
+  // showModal() focuses the dialog itself, not the first field, so without
+  // this the first thing typed goes nowhere.
+  $("#f-name").focus();
+}
+
+$("#add-rule").addEventListener("click", () => {
+  $("#f-rules").insertAdjacentHTML("beforeend", ruleRow());
+  wireRuleButtons();
+});
+
+$("#cancel-theme").addEventListener("click", () => $("#theme-dialog").close());
+
+// Derive an id from the name, but only while creating and only until the
+// field is touched - changing an id later would orphan the theme's history.
+$("#f-name").addEventListener("input", (e) => {
+  if (editing || $("#f-id").dataset.touched) return;
+  $("#f-id").value = e.target.value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+});
+$("#f-id").addEventListener("input", () => ($("#f-id").dataset.touched = "1"));
+
+$("#theme-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const rules = $$("#f-rules .rule").map((row) => {
+    const rule = {};
+    const from = row.querySelector(".r-from").value.trim();
+    const to = row.querySelector(".r-to").value.trim();
+    if (from && to) rule.dateWindow = { from, to };
+    const days = [...row.querySelectorAll(".r-day:checked")].map((c) => Number(c.value));
+    if (days.length > 0) rule.weekdays = days;
+    const tFrom = row.querySelector(".r-tfrom").value;
+    const tTo = row.querySelector(".r-tto").value;
+    if (tFrom && tTo) rule.timeOfDay = { from: tFrom, to: tTo };
+    return rule;
+  });
+
+  const body = {
+    id: $("#f-id").value.trim(),
+    name: $("#f-name").value.trim(),
+    filename: $("#f-image").value,
+    sound: $("#f-sound").value || undefined,
+    priority: Number($("#f-priority").value),
+    enabled: $("#f-enabled").checked,
+    rules,
+  };
+
+  try {
+    await api("/api/themes", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    $("#theme-dialog").close();
+    toast(`Saved ${body.name}.`, "ok");
+    await renderThemes();
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+});
+
+$("#delete-theme").addEventListener("click", async () => {
+  if (!editing) return;
+  // Deliberately a confirm: it is destructive, instant and not undoable.
+  if (!confirm(`Delete the theme "${editing.name}"? The GIF itself is kept.`)) return;
+  try {
+    await api(`/api/themes?id=${encodeURIComponent(editing.id)}`, { method: "DELETE" });
+    $("#theme-dialog").close();
+    toast(`Deleted ${editing.name}.`, "ok");
+    await renderThemes();
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+});
+
+// ------------------------------------------------------------------- media
+
+async function renderMedia() {
+  media = await api("/api/media");
+  if (media.length === 0) {
+    $("#media-grid").innerHTML = emptyState("No images yet", "Upload a GIF to get started.");
+    return;
+  }
+
+  $("#media-grid").innerHTML = media
+    .map((m) => {
+      const [kind, label] = VERDICT[m.verdict] ?? ["mute", "unreadable"];
+      return `
+      <div class="tile">
+        <div class="thumb"><img loading="lazy" src="/media/${encodeURIComponent(m.filename)}" alt=""></div>
+        <div class="body">
+          <div class="fname" title="${esc(m.filename)}">${esc(m.filename)}</div>
+          <div class="facts">
+            <span class="badge ${kind}">${esc(label)}</span>
+            ${m.frames ? `<span>${m.frames} frames</span>` : ""}
+            <span>${kb(m.bytes)}</span>
+          </div>
+          ${m.inUse ? `<div class="facts"><span class="badge mute">used by a theme</span></div>` : ""}
+          ${m.verdict && m.verdict !== "safe" ? `<div class="facts" style="font-size:11.5px">${esc(m.advice ?? "")}</div>` : ""}
+          <div class="acts">
+            ${m.verdict === "likely-fails" ? `<button class="btn small" data-fit="${esc(m.filename)}">Shrink</button>` : ""}
+            <button class="btn small danger" data-del-media="${esc(m.filename)}" ${m.inUse ? "disabled title='Used by a theme'" : ""}>Delete</button>
+          </div>
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  $$("[data-fit]").forEach((b) =>
+    b.addEventListener("click", (e) =>
+      withBusy(e.target, async () => {
+        const result = await api(`/api/media/fit?filename=${encodeURIComponent(b.dataset.fit)}`, {
+          method: "POST",
+        });
+        toast(`Wrote ${result.to} — the original is untouched.`, "ok");
+        await renderMedia();
+      }),
+    ),
+  );
+
+  $$("[data-del-media]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!confirm(`Delete ${b.dataset.delMedia} from the library?`)) return;
+      try {
+        await api(`/api/media?filename=${encodeURIComponent(b.dataset.delMedia)}`, { method: "DELETE" });
+        toast("Deleted.", "ok");
+        await renderMedia();
+      } catch (error) {
+        toast(error.message, "bad");
+      }
+    }),
+  );
+}
+
+$("#upload-gif").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const result = await api("/api/media", { method: "POST", body: form });
+    toast(
+      result.duplicateOf
+        ? `Already in the library as ${result.duplicateOf}.`
+        : `Uploaded ${result.filename}.`,
+      "ok",
+    );
+    await renderMedia();
+  } catch (error) {
+    toast(error.message, "bad");
+  } finally {
+    event.target.value = "";
+  }
+});
+
+// ------------------------------------------------------------------ sounds
+
+async function loadSounds() {
+  try {
+    sounds = await api("/api/ringtones");
+  } catch {
+    // 503 when no admin credentials are configured. Images still work, which
+    // is the whole reason the sound half is optional.
+    sounds = { ringtones: [], limit: 12, unavailable: true };
+  }
+}
+
+async function renderSounds() {
+  await loadSounds();
+  if (sounds.unavailable) {
+    $("#sounds-list").innerHTML = emptyState(
+      "Ring sounds are unavailable",
+      "They need PROTECT_ADMIN_USER and PROTECT_ADMIN_PASS. Welcome images work without them.",
+    );
+    return;
+  }
+
+  const rows = sounds.ringtones
+    .map(
+      (r) => `
+      <tr>
+        <td><strong>${esc(r.name)}</strong> ${r.isDefault ? `<span class="badge mute">stock</span>` : ""}</td>
+        <td class="mono">${esc(r.id)}</td>
+        <td>${r.inUse ? `<span class="badge ok">in use</span>` : ""}</td>
+        <td style="text-align:right">
+          ${r.isDefault ? "" : `<button class="btn small danger" data-del-sound="${esc(r.id)}" data-name="${esc(r.name)}">Delete</button>`}
+        </td>
+      </tr>`,
+    )
+    .join("");
+
+  const full = sounds.ringtones.length >= sounds.limit;
+  $("#sounds-list").innerHTML = `
+    <p class="sub">
+      ${sounds.ringtones.length} of ${sounds.limit} slots used.
+      ${full ? `<strong style="color:var(--bad)">Full — delete one before uploading.</strong>` : ""}
+    </p>
+    <table>
+      <thead><tr><th>Name</th><th>Id</th><th></th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  $$("[data-del-sound]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!confirm(`Delete the ring sound "${b.dataset.name}"? This cannot be undone.`)) return;
+      try {
+        await api(`/api/ringtones?id=${encodeURIComponent(b.dataset.delSound)}`, { method: "DELETE" });
+        toast("Deleted.", "ok");
+        await renderSounds();
+      } catch (error) {
+        toast(error.message, "bad");
+      }
+    }),
+  );
+}
+
+$("#upload-sound").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const result = await api("/api/ringtones", { method: "POST", body: form });
+    toast(`Uploaded ${result.name}.`, "ok");
+    await renderSounds();
+  } catch (error) {
+    toast(error.message, "bad");
+  } finally {
+    event.target.value = "";
+  }
+});
+
+// ---------------------------------------------------------------- calendar
+
+async function renderCalendar() {
+  const from = $("#cal-from").value;
+  const days = $("#cal-days").value;
+  const data = await api(`/api/calendar?days=${days}${from ? `&from=${from}` : ""}`);
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+  $("#calendar").innerHTML = data
+    .map((d) => {
+      const [, month, day] = d.date.split("-");
+      const classes = [
+        "day",
+        d.priority > 0 ? "special" : "",
+        d.themeId ? "" : "none",
+        d.date === todayKey ? "today" : "",
+      ].join(" ");
+      return `
+      <div class="${classes}" title="${esc(d.date)}${d.themeName ? ` — ${esc(d.themeName)}` : ""}">
+        <div class="d">${month}/${day}</div>
+        <div class="t">${esc(d.themeName ?? "nothing")}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+$("#cal-from").addEventListener("change", renderCalendar);
+$("#cal-days").addEventListener("change", renderCalendar);
+
+// ----------------------------------------------------------------- history
+
+async function renderHistory() {
+  const rows = await api("/api/applies?limit=100");
+  if (rows.length === 0) {
+    $("#history").innerHTML = `<tbody><tr><td>${esc("Nothing has run yet.")}</td></tr></tbody>`;
+    return;
+  }
+  $("#history").innerHTML = `
+    <thead><tr><th>When</th><th>Outcome</th><th>Theme</th><th>Why</th></tr></thead>
+    <tbody>
+      ${rows
+        .map(
+          (r) => `
+        <tr>
+          <td style="white-space:nowrap">${esc(new Date(r.at).toLocaleString())}</td>
+          <td><span class="badge ${r.outcome === "failed" ? "bad" : r.outcome === "no-theme" ? "warn" : r.outcome === "unchanged" ? "mute" : "ok"}">${esc(r.outcome)}</span></td>
+          <td>${esc(r.themeId ?? "—")}</td>
+          <td style="color:var(--text-dim)">${esc(r.reason)}</td>
+        </tr>`,
+        )
+        .join("")}
+    </tbody>`;
+}
+
+// -------------------------------------------------------------------- boot
+
+const RENDERERS = {
+  now: renderNow,
+  themes: renderThemes,
+  media: renderMedia,
+  sounds: renderSounds,
+  calendar: renderCalendar,
+  history: renderHistory,
+};
+
+async function boot() {
+  const today = new Date();
+  $("#cal-from").value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+  try {
+    await renderNow();
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+  const initial = location.hash.slice(1);
+  if (TABS.includes(initial) && initial !== "now") show(initial);
+}
+
+boot();
