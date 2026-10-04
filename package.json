@@ -1,6 +1,6 @@
 {
   "name": "doorman",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Scheduling, grouping and randomisation for UniFi G4 Doorbell Pro welcome images and ring sounds",
   "type": "module",
   "license": "MIT",

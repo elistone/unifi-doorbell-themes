@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.4.0 - 2026-10-04
+
 ### Added
 
 - **More than one doorbell.** Doorbells are now rows in the database with
