@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.5.0 - 2026-10-04
+
 ### Added
 
 - `themes.ts devices` — list, add, rename, enable, disable and remove
