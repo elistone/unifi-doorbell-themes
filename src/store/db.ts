@@ -51,6 +51,26 @@ const SCHEMA = `
     value TEXT NOT NULL
   );
 
+  -- Accounts. Normally exactly one; the schema does not insist on it.
+  --
+  -- "No rows" is the first-run signal the UI keys off, which is why there is
+  -- no seeded default account: a default credential that nobody is forced to
+  -- change is the same as no credential at all.
+  CREATE TABLE IF NOT EXISTS users (
+    username      TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+  );
+
+  -- Sessions. Only the digest of each token is stored - see digestToken.
+  CREATE TABLE IF NOT EXISTS sessions (
+    token_digest TEXT PRIMARY KEY,
+    username     TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS sessions_user ON sessions (username);
+
   -- Audit. Answers "why is it showing that" without guessing.
   CREATE TABLE IF NOT EXISTS applies (
     at         TEXT NOT NULL,
@@ -240,6 +260,72 @@ export class Store {
         "INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       )
       .run(key, value);
+  }
+
+  // ----------------------------------------------------------------- auth
+
+  userCount(): number {
+    const row = this.#db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number };
+    return Number(row.n);
+  }
+
+  user(username: string): { username: string; passwordHash: string } | null {
+    const row = this.#db.prepare("SELECT * FROM users WHERE username = ?").get(username) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? { username: String(row.username), passwordHash: String(row.password_hash) } : null;
+  }
+
+  createUser(username: string, passwordHash: string): void {
+    this.#db
+      .prepare("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
+      .run(username, passwordHash, new Date().toISOString());
+  }
+
+  setPassword(username: string, passwordHash: string): void {
+    this.#db
+      .prepare("UPDATE users SET password_hash = ? WHERE username = ?")
+      .run(passwordHash, username);
+  }
+
+  createSession(digest: string, username: string, expiresAt: Date): void {
+    this.#db
+      .prepare("INSERT INTO sessions (token_digest, username, created_at, expires_at) VALUES (?, ?, ?, ?)")
+      .run(digest, username, new Date().toISOString(), expiresAt.toISOString());
+  }
+
+  /** The username for a live session, or null. Expired rows are swept here. */
+  sessionUser(digest: string): string | null {
+    const row = this.#db.prepare("SELECT * FROM sessions WHERE token_digest = ?").get(digest) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) return null;
+    if (new Date(String(row.expires_at)).getTime() < Date.now()) {
+      this.deleteSession(digest);
+      return null;
+    }
+    return String(row.username);
+  }
+
+  deleteSession(digest: string): void {
+    this.#db.prepare("DELETE FROM sessions WHERE token_digest = ?").run(digest);
+  }
+
+  /**
+   * Drop every session for a user.
+   *
+   * Called on a password change: the point of changing a password is to lock
+   * someone out, and leaving their existing session valid would not.
+   */
+  deleteSessionsFor(username: string): void {
+    this.#db.prepare("DELETE FROM sessions WHERE username = ?").run(username);
+  }
+
+  deleteExpiredSessions(): number {
+    const result = this.#db
+      .prepare("DELETE FROM sessions WHERE expires_at < ?")
+      .run(new Date().toISOString());
+    return Number(result.changes);
   }
 
   // --------------------------------------------------------------- applies

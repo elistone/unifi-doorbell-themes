@@ -24,6 +24,17 @@ import { MAX_RINGTONES } from "../device/private.ts";
 import type { PrivateApi } from "../device/private.ts";
 import { Store } from "../store/db.ts";
 import { VERSION } from "../version.ts";
+import {
+  SESSION_TTL_MS,
+  clearFailures,
+  hashPassword,
+  lockedOutFor,
+  newSessionToken,
+  passwordProblem,
+  recordFailure,
+  usernameProblem,
+  verifyPassword,
+} from "./auth.ts";
 
 export interface ApiDeps {
   store: Store;
@@ -32,6 +43,10 @@ export interface ApiDeps {
   sound?: SoundDevice;
   /** Only present when admin credentials were supplied. */
   priv?: PrivateApi;
+  /** Who is calling, resolved by the router from the session cookie. */
+  callerOf: (req: IncomingMessage) => string | null;
+  /** The caller's session digest, so logout can revoke exactly that one. */
+  sessionDigestOf: (req: IncomingMessage) => string | null;
   cameraId: string;
   mediaDir: string;
   protectVersion: string;
@@ -40,8 +55,21 @@ export interface ApiDeps {
   onApplied?: (date: string) => void;
 }
 
+/** Set by the router before a route runs, for routes that need the caller. */
+export interface Caller {
+  username: string | null;
+}
+
 /** 20MB. The device accepts 10MB; the slack is for the error to be ours. */
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+/**
+ * A real hash of a value nobody knows, to compare against when the username
+ * does not exist. Without it, a missing account returns noticeably faster
+ * than a wrong password and the login enumerates usernames.
+ */
+const DUMMY_HASH =
+  "scrypt$00000000000000000000000000000000$" + "0".repeat(128);
 
 const GIF_EXTENSIONS = new Set([".gif"]);
 const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".flac"]);
@@ -148,6 +176,16 @@ function safeName(name: string): string {
 export function createApi(deps: ApiDeps) {
   const { store, device, source, sound, priv, cameraId, mediaDir } = deps;
 
+  /**
+   * Issue a session and hand the token back for the router to set as a
+   * cookie. The route layer never touches Set-Cookie itself.
+   */
+  async function startSession(username: string): Promise<string> {
+    const { token, digest } = newSessionToken();
+    store.createSession(digest, username, new Date(Date.now() + SESSION_TTL_MS));
+    return token;
+  }
+
   /** Hash -> filename, so themes can show what they point at. */
   async function mediaIndex(): Promise<Map<string, string>> {
     return source.localFiles();
@@ -163,7 +201,7 @@ export function createApi(deps: ApiDeps) {
 
   const routes: Record<string, (req: IncomingMessage, url: URL) => Promise<unknown>> = {
     /** Everything the dashboard needs for its first paint, in one request. */
-    "GET /api/state": async () => {
+    "GET /api/state": async (req) => {
       const [showing, currentRingtone, ringtones] = await Promise.all([
         device.currentImage().catch(() => null),
         sound?.currentRingtone().catch(() => null) ?? Promise.resolve(null),
@@ -183,6 +221,7 @@ export function createApi(deps: ApiDeps) {
 
       return {
         version: VERSION,
+        username: deps.callerOf(req),
         protectVersion: deps.protectVersion,
         cameraId,
         soundEnabled: Boolean(sound),
@@ -363,6 +402,22 @@ export function createApi(deps: ApiDeps) {
       return { removed: id };
     },
 
+    /**
+     * Readiness, and the one route that must answer before anyone has ever
+     * logged in - Ansible waits on it during install and Uptime Kuma polls
+     * it. Its STATUS CODE is the signal, not its body.
+     */
+    "GET /health": async () => {
+      const last = store.recentApplies(1)[0];
+      const healthy = !last || (Date.now() - new Date(last.at).getTime()) / 3_600_000 <= 25;
+      // Thrown rather than returned, because the status code is the point
+      // and every other route here answers 200.
+      if (!healthy) {
+        throw new HttpError(503, `stalled: nothing applied since ${last.at}`);
+      }
+      return { status: "ok", version: VERSION, last: last ?? null };
+    },
+
     "GET /api/applies": async (_req, url) => store.recentApplies(Number(url.searchParams.get("limit") ?? 50)),
 
     /**
@@ -419,6 +474,93 @@ export function createApi(deps: ApiDeps) {
       // a manual apply counts as today's.
       if (!dryRun && result.outcome !== "failed") deps.onApplied?.(todayLocal(now));
       return result;
+    },
+
+    // ------------------------------------------------------------- accounts
+
+    /**
+     * The gate the UI asks about before rendering anything.
+     *
+     * Unauthenticated by design - it has to be answerable by someone who is
+     * not logged in, and it reveals only whether an account exists.
+     */
+    "GET /api/session": async (req) => {
+      const username = deps.callerOf(req);
+      return {
+        needsSetup: store.userCount() === 0,
+        authenticated: username !== null,
+        username,
+        version: VERSION,
+      };
+    },
+
+    /**
+     * Create the first account. Refuses once one exists, which is what stops
+     * this being an open "make yourself an admin" endpoint.
+     */
+    "POST /api/setup": async (req) => {
+      if (store.userCount() > 0) {
+        throw new HttpError(409, "Setup has already been completed. Sign in instead.");
+      }
+      const { username, password } = await readJson<{ username: string; password: string }>(req);
+      const nameProblem = usernameProblem(username ?? "");
+      if (nameProblem) throw new HttpError(400, nameProblem);
+      const pwProblem = passwordProblem(password ?? "");
+      if (pwProblem) throw new HttpError(400, pwProblem);
+
+      store.createUser(username, await hashPassword(password));
+      return { username, session: await startSession(username) };
+    },
+
+    "POST /api/login": async (req) => {
+      const { username, password } = await readJson<{ username: string; password: string }>(req);
+      if (!username || !password) throw new HttpError(400, "Username and password are required.");
+
+      const waitMs = lockedOutFor(username);
+      if (waitMs > 0) {
+        throw new HttpError(429, `Too many attempts. Try again in ${Math.ceil(waitMs / 1000)}s.`);
+      }
+
+      // Always run one scrypt, even for a username that does not exist, so a
+      // missing account and a wrong password take the same time to answer.
+      // Otherwise the login enumerates usernames by how fast it says no.
+      const user = store.user(username);
+      const matched = await verifyPassword(password, user?.passwordHash ?? DUMMY_HASH);
+      const ok = user !== null && matched;
+
+      if (!ok) {
+        recordFailure(username);
+        // One message for both cases: which half was wrong is not the
+        // caller's business.
+        throw new HttpError(401, "Wrong username or password.");
+      }
+
+      clearFailures(username);
+      return { username, session: await startSession(username) };
+    },
+
+    "POST /api/logout": async (req) => {
+      const digest = deps.sessionDigestOf(req);
+      if (digest) store.deleteSession(digest);
+      return { ended: true };
+    },
+
+    "POST /api/password": async (req) => {
+      const username = deps.callerOf(req);
+      if (!username) throw new HttpError(401, "Sign in first.");
+      const { current, next } = await readJson<{ current: string; next: string }>(req);
+
+      const user = store.user(username);
+      if (!user || !(await verifyPassword(current ?? "", user.passwordHash))) {
+        throw new HttpError(403, "That is not your current password.");
+      }
+      const problem = passwordProblem(next ?? "");
+      if (problem) throw new HttpError(400, problem);
+
+      store.setPassword(username, await hashPassword(next));
+      // Every other session is now someone who knows the old password.
+      store.deleteSessionsFor(username);
+      return { changed: true, session: await startSession(username) };
     },
 
     "GET /api/selection": async () => ({ selection: store.selection() }),

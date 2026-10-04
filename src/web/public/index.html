@@ -9,6 +9,54 @@
 </head>
 <body>
 
+<!-- Shown until there is a session. The app markup below stays hidden
+     rather than being rendered on demand, so there is one place the page
+     structure lives and no duplicate login-only stylesheet. -->
+<div id="gate" hidden>
+  <div class="gate-card">
+    <div class="gate-brand"><span class="dot">🔔</span> Doorman</div>
+
+    <form id="setup-form" hidden>
+      <h2>Create your account</h2>
+      <p class="sub">
+        First run. This account is the only way in, so nothing is set up for
+        you — there is no default password to forget to change.
+      </p>
+      <label class="field">
+        <span>Username</span>
+        <input type="text" id="s-user" autocomplete="username" required
+               pattern="[A-Za-z0-9._\-]{2,64}" placeholder="eli">
+      </label>
+      <label class="field">
+        <span>Password <span class="hint">— at least 10 characters</span></span>
+        <input type="password" id="s-pass" autocomplete="new-password" required minlength="10">
+      </label>
+      <label class="field">
+        <span>Confirm password</span>
+        <input type="password" id="s-pass2" autocomplete="new-password" required minlength="10">
+      </label>
+      <button type="submit" class="btn primary wide">Create account</button>
+    </form>
+
+    <form id="login-form" hidden>
+      <h2>Sign in</h2>
+      <p class="sub">Doorman is locked.</p>
+      <label class="field">
+        <span>Username</span>
+        <input type="text" id="l-user" autocomplete="username" required>
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="l-pass" autocomplete="current-password" required>
+      </label>
+      <button type="submit" class="btn primary wide">Sign in</button>
+    </form>
+
+    <p class="gate-error" id="gate-error" hidden></p>
+  </div>
+</div>
+
+<div id="app" hidden>
 <header>
   <div class="brand">
     <span class="dot">🔔</span>
@@ -22,6 +70,7 @@
     <button data-tab="sounds">Sounds</button>
     <button data-tab="calendar">Calendar</button>
     <button data-tab="history">History</button>
+    <button id="account" title="Account">👤</button>
   </nav>
 </header>
 
@@ -145,6 +194,8 @@
   </section>
 </main>
 
+</div><!-- /#app -->
+
 <!-- ------------------------------------------------------ theme editor -->
 <dialog id="theme-dialog">
   <form method="dialog" id="theme-form">
@@ -183,6 +234,38 @@
       <div class="spacer"></div>
       <button type="button" class="btn" id="cancel-theme">Cancel</button>
       <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="account-dialog">
+  <form method="dialog" id="password-form">
+    <div class="head">Account</div>
+    <div class="content">
+      <p class="sub">Signed in as <strong id="who"></strong>.</p>
+      <h3>Change password</h3>
+      <label class="field">
+        <span>Current password</span>
+        <input type="password" id="p-current" autocomplete="current-password" required>
+      </label>
+      <label class="field">
+        <span>New password <span class="hint">— at least 10 characters</span></span>
+        <input type="password" id="p-next" autocomplete="new-password" required minlength="10">
+      </label>
+      <label class="field" style="margin-bottom:0">
+        <span>Confirm new password</span>
+        <input type="password" id="p-next2" autocomplete="new-password" required minlength="10">
+      </label>
+      <p class="sub" style="margin:12px 0 0">
+        Changing it signs out every other session, which is the point of
+        changing it.
+      </p>
+    </div>
+    <div class="foot">
+      <button type="button" class="btn danger" id="logout">Sign out</button>
+      <div class="spacer"></div>
+      <button type="button" class="btn" id="cancel-account">Close</button>
+      <button type="submit" class="btn primary">Change password</button>
     </div>
   </form>
 </dialog>

@@ -54,6 +54,10 @@ const log = (message: string) => console.log(`[${new Date().toISOString()}] ${me
 const protectVersion = await protect.assertSupportedVersion();
 log(`doorman ${VERSION} - Protect ${protectVersion}, camera ${cameraId}, sound ${sound ? "enabled" : "disabled (no admin credentials)"}`);
 
+if (store.userCount() === 0) {
+  log("no account yet - open the UI to create one; until then it is unconfigured");
+}
+
 const claimed = await adopt(store, source);
 for (const { filename, assetName } of claimed) log(`adopted ${filename} -> ${assetName}`);
 
@@ -126,30 +130,31 @@ const handle = createHandler({
   mediaDir: process.env.DOORMAN_MEDIA ?? "media",
   protectVersion,
   defaultSound: process.env.DOORMAN_DEFAULT_RINGTONE,
+  // Set when something terminates TLS in front of this - the app itself
+  // always speaks plain HTTP, so it cannot work this out for itself, and
+  // guessing wrong either breaks login (Secure over HTTP) or sends the
+  // session cookie in the clear.
+  secureCookies: process.env.DOORMAN_SECURE_COOKIES === "true",
   // An apply from the UI counts as today's roll, or the scheduler would roll
   // again minutes later and overwrite what the person just chose.
   onApplied: (date) => store.setLastRolledDate(date),
 });
 
-createServer((req, res) => {
-  // /health stays here rather than in the API module: it is the readiness
-  // probe Ansible and Uptime Kuma call, its status code is load-bearing, and
-  // it must keep answering even if the UI layer is broken.
-  if (req.url === "/health") {
-    const last = store.recentApplies(1)[0];
-    const healthy = !last || (Date.now() - new Date(last.at).getTime()) / 3_600_000 <= 25;
-    res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({ status: healthy ? "ok" : "stalled", version: VERSION, last: last ?? null }, null, 2),
-    );
-    return;
-  }
-  void handle(req, res);
-}).listen(port, () => log(`listening on :${port}`));
+createServer((req, res) => void handle(req, res)).listen(port, () =>
+  log(`listening on :${port}`),
+);
 
 await tick();
 setInterval(() => void tick(), tickSeconds * 1000);
 setInterval(() => void checkForStall(), 3_600_000);
+
+// Sweep expired sessions hourly. sessionUser() already drops one when it is
+// used after expiry, but a session nobody returns to would otherwise sit in
+// the table forever.
+setInterval(() => {
+  const removed = store.deleteExpiredSessions();
+  if (removed > 0) log(`cleared ${removed} expired session${removed === 1 ? "" : "s"}`);
+}, 3_600_000);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {

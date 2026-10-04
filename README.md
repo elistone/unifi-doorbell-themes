@@ -91,6 +91,18 @@ deleted without admin credentials.
 
 ## The UI
 
+**First run asks you to create an account.** There is no default username or
+password, deliberately — a default credential that nobody is forced to change
+is the same as no credential at all. Passwords are scrypt-hashed and sessions
+are HttpOnly, SameSite=Strict cookies holding a random token, of which only a
+digest is stored.
+
+Everything except `/health` and the login itself needs that session, so the
+service can sit behind a reverse proxy without a second password in front of
+it. If something terminates TLS for you, set `DOORMAN_SECURE_COOKIES=true` so
+the session cookie carries `Secure` — the app only ever speaks plain HTTP and
+cannot work that out for itself.
+
 Browse to the service on its port and you get the whole thing: what is on the
 doorbell right now, a theme editor, the image library with a per-file verdict
 on whether Protect will accept it, ring sounds, and a **calendar preview** of

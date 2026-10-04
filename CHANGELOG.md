@@ -5,8 +5,38 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **Accounts.** Doorman now has its own login instead of relying on a shared
+  credential at the reverse proxy. Passwords are scrypt-hashed; sessions are
+  random tokens of which only a digest is stored, in an HttpOnly,
+  SameSite=Strict cookie.
+- **First-run setup.** With no account the UI offers to create one. There is
+  deliberately no seeded default: a default credential nobody is forced to
+  change is the same as no credential.
+- Change password from the UI, which revokes every other session, and sign
+  out, which revokes the current one server-side rather than just dropping
+  the cookie locally.
+- Repeated failed logins lock an account for a minute. Per account, so one
+  under attack cannot lock out another.
+
+### Changed
+
+- Every route except `/health`, `/api/session`, `/api/setup`, `/api/login`
+  and the login page's own assets now requires a session — the media
+  thumbnails included.
+- `/health` moved into the router's table, so there is one place routes live
+  and the list of public ones can be read against it.
+
 ### Fixed
 
+- The two **Upload** buttons were `<label class="btn">` and the stylesheet
+  only matched `button.btn, a.btn`, so the most important action on the
+  Images and Sounds tabs rendered as plain grey text. The button styles are
+  element-agnostic now.
+- Clicking the account icon called `show(undefined)` and hid every section,
+  leaving a blank page behind the dialog — it sits in the nav and the tab
+  wiring grabbed it.
 - `scripts/release.sh` would happily add a second heading for a version the
   changelog already documented, which is exactly what happened cutting
   v0.1.0 by hand. It now refuses, and says to write notes under

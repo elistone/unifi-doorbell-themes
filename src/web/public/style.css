@@ -196,7 +196,13 @@ h3 { font-size: 14px; margin: 0 0 10px; color: var(--text-dim); font-weight: 600
 
 /* --------------------------------------------------------------- buttons */
 
-button.btn, a.btn {
+/* Element-agnostic on purpose.
+ *
+ * These were `button.btn, a.btn`, and the two upload controls are
+ * `<label class="btn">` wrapping a hidden file input - the only way to style
+ * a file picker. They matched nothing and rendered as plain grey text, so
+ * the two most important actions on those tabs did not look like buttons. */
+.btn {
   appearance: none;
   font: inherit;
   font-weight: 600;
@@ -212,13 +218,13 @@ button.btn, a.btn {
   align-items: center;
   gap: 7px;
 }
-button.btn:hover, a.btn:hover { background: var(--surface-2); }
-button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-button.btn.primary:hover { filter: brightness(1.08); }
-button.btn.danger { color: var(--bad); }
-button.btn.danger:hover { background: var(--bad-bg); }
-button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-button.btn.small { padding: 5px 10px; font-size: 13px; }
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--bad); }
+.btn.danger:hover { background: var(--bad-bg); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.small { padding: 5px 10px; font-size: 13px; }
 
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .row.end { justify-content: flex-end; }
@@ -388,4 +394,73 @@ td.mono { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) {
   .spin { animation: none; }
   .toast { animation: none; }
+}
+
+/* ------------------------------------------------------------------ gate */
+
+#gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+}
+
+.gate-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 28px;
+}
+
+.gate-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 700;
+  font-size: 18px;
+  margin-bottom: 22px;
+}
+.gate-brand .dot { font-size: 22px; }
+
+.gate-card h2 { font-size: 17px; margin: 0 0 6px; }
+.gate-card .sub { font-size: 13.5px; margin-bottom: 20px; }
+
+.btn.wide { width: 100%; justify-content: center; margin-top: 4px; }
+
+.gate-error {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bad-bg);
+  color: var(--bad);
+  font-size: 13.5px;
+  font-weight: 550;
+}
+
+/* The account button sits in the nav but is not a tab, so it must not pick
+   up the tab's current-page styling. */
+nav #account {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font-size: 15px;
+  padding: 7px 11px;
+  border-radius: 7px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+nav #account:hover { background: var(--surface-2); }
+
+input[type="password"] {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
 }

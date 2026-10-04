@@ -44,6 +44,12 @@ async function api(path, options = {}) {
   } catch {
     throw new Error(text.slice(0, 200) || `${response.status} ${response.statusText}`);
   }
+  if (response.status === 401 && !path.startsWith("/api/login")) {
+    // The session went away - expired, swept, or revoked by a password
+    // change elsewhere. Show the gate rather than a wall of failed requests.
+    showGate();
+    throw new Error("Your session ended. Sign in again.");
+  }
   if (!response.ok) throw new Error(body?.error ?? `${response.status} ${response.statusText}`);
   return body;
 }
@@ -91,6 +97,7 @@ let sounds = { ringtones: [], limit: 12 };
 const TABS = ["now", "themes", "media", "sounds", "calendar", "history"];
 
 function show(tab) {
+  if (!TABS.includes(tab)) return;
   for (const name of TABS) $(`#tab-${name}`).hidden = name !== tab;
   for (const button of $$("nav button")) {
     if (button.dataset.tab === tab) button.setAttribute("aria-current", "page");
@@ -100,13 +107,17 @@ function show(tab) {
   RENDERERS[tab]?.();
 }
 
-$$("nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
+// [data-tab] rather than every button in the nav: the account button lives
+// there too, and without the filter clicking it called show(undefined),
+// which hid every section and left a blank page behind the dialog.
+$$("nav button[data-tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
 
 // -------------------------------------------------------------- Now panel
 
 async function renderNow() {
   state = await api("/api/state");
   $("#version").textContent = `v${state.version}`;
+  if (state.username) $("#who").textContent = state.username;
 
   const { showing, ringtone, today, last } = state;
   const image = showing.filename
@@ -624,6 +635,104 @@ async function renderHistory() {
     </tbody>`;
 }
 
+// -------------------------------------------------------------------- gate
+
+function gateError(message) {
+  const el = $("#gate-error");
+  el.textContent = message;
+  el.hidden = !message;
+}
+
+function showGate(mode = "login") {
+  $("#app").hidden = true;
+  $("#gate").hidden = false;
+  $("#setup-form").hidden = mode !== "setup";
+  $("#login-form").hidden = mode !== "login";
+  gateError("");
+  $(mode === "setup" ? "#s-user" : "#l-user").focus();
+}
+
+function showApp() {
+  $("#gate").hidden = true;
+  $("#app").hidden = false;
+}
+
+$("#setup-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  gateError("");
+  if ($("#s-pass").value !== $("#s-pass2").value) {
+    gateError("Those two passwords are not the same.");
+    return;
+  }
+  try {
+    await api("/api/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("#s-user").value.trim(), password: $("#s-pass").value }),
+    });
+    showApp();
+    await start();
+    toast("Account created. You are signed in.", "ok");
+  } catch (error) {
+    gateError(error.message);
+  }
+});
+
+$("#login-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  gateError("");
+  try {
+    await api("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("#l-user").value.trim(), password: $("#l-pass").value }),
+    });
+    $("#l-pass").value = "";
+    showApp();
+    await start();
+  } catch (error) {
+    gateError(error.message);
+  }
+});
+
+// ----------------------------------------------------------------- account
+
+$("#account").addEventListener("click", () => {
+  $("#p-current").value = $("#p-next").value = $("#p-next2").value = "";
+  $("#account-dialog").showModal();
+});
+
+$("#cancel-account").addEventListener("click", () => $("#account-dialog").close());
+
+$("#logout").addEventListener("click", async () => {
+  try {
+    await api("/api/logout", { method: "POST" });
+  } catch {
+    // Already gone as far as the server is concerned; the gate is still right.
+  }
+  $("#account-dialog").close();
+  showGate("login");
+});
+
+$("#password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if ($("#p-next").value !== $("#p-next2").value) {
+    toast("Those two passwords are not the same.", "bad");
+    return;
+  }
+  try {
+    await api("/api/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current: $("#p-current").value, next: $("#p-next").value }),
+    });
+    $("#account-dialog").close();
+    toast("Password changed. Other sessions have been signed out.", "ok");
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+});
+
 // -------------------------------------------------------------------- boot
 
 const RENDERERS = {
@@ -635,7 +744,8 @@ const RENDERERS = {
   history: renderHistory,
 };
 
-async function boot() {
+/** Everything that needs a session. Called once the gate is passed. */
+async function start() {
   const today = new Date();
   $("#cal-from").value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
@@ -646,6 +756,29 @@ async function boot() {
   }
   const initial = location.hash.slice(1);
   if (TABS.includes(initial) && initial !== "now") show(initial);
+}
+
+async function boot() {
+  let session;
+  try {
+    session = await api("/api/session");
+  } catch {
+    // The server is unreachable or broken. A login form would be a lie.
+    document.body.innerHTML =
+      '<div class="empty-state"><strong>Doorman is not responding</strong>' +
+      "The page loaded but the service behind it did not answer. Check the container.</div>";
+    return;
+  }
+
+  $("#who").textContent = session.username ?? "";
+  if (session.needsSetup) {
+    showGate("setup");
+  } else if (!session.authenticated) {
+    showGate("login");
+  } else {
+    showApp();
+    await start();
+  }
 }
 
 boot();
