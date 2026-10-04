@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.3.0 - 2026-10-04
+
 ### Added
 
 - **Poster-frame thumbnails** for the image library and theme list, cached
