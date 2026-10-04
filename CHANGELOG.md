@@ -5,7 +5,12 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
-## 0.1.0 - 2026-10-04
+### Fixed
+
+- `scripts/release.sh` would happily add a second heading for a version the
+  changelog already documented, which is exactly what happened cutting
+  v0.1.0 by hand. It now refuses, and says to write notes under
+  `## Unreleased`.
 
 ## 0.1.0 - 2026-10-04
 

@@ -76,6 +76,11 @@ node -e "
     console.error('No \'## Unreleased\' section in CHANGELOG.md - add one.');
     process.exit(1);
   }
+  if (text.includes('## ${next} ')) {
+    console.error('CHANGELOG.md already has a ## ${next} section.');
+    console.error('Write release notes under ## Unreleased, not under a version heading.');
+    process.exit(1);
+  }
   const today = new Date().toISOString().slice(0, 10);
   fs.writeFileSync(
     file,
