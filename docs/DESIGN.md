@@ -169,6 +169,24 @@ A GIF upload produces **two** assets: the `.png` sprite and a `.png.gif`
 preview. Only the sprite is size-checked — one preview on that NVR is 1294 KB,
 comfortably over the limit the sprite must respect.
 
+**Uploading is slow, and the first timeout looked like a rejection.** The NVR
+tiles every frame and quantises to 32 colours on appliance hardware before it
+replies, and an 88-frame GIF took longer than the client's flat 30 s budget.
+The failure surfaced as `The operation was aborted due to timeout`, which
+reads exactly like a rejected file and is not one — the upload completed
+server-side and left an asset nothing had a record of. Uploads now get 300 s;
+ordinary metadata requests keep 30 s, where a hang is worth surfacing fast.
+
+That near-miss is also what proved `adopt()` earns its keep: the re-run
+matched the orphan by `originalName` and claimed it instead of uploading a
+second copy. Any client-side abort can leave an asset behind, and animations
+cannot be deleted through the official API, so the recovery path is not
+optional.
+
+The 88-frame file also settles one end of the borderline band empirically:
+`schitts_creek_hello.gif`, 1858 KB of source, **stored under the limit**. The
+`?` verdict genuinely means "depends on the content", not "probably too big".
+
 ## Open — proceeding on these defaults, say if any is wrong
 
 | Question | Default |
@@ -231,9 +249,10 @@ manual trigger, a preview and a test entry point without any extra machinery.
    end to end on real hardware.
 3. **Three hardware experiments** (below) before committing to a sound design.
 4. **Sound layer**, shaped by what those experiments return.
-5. **Scheduler daemon** wrapping `apply()`.
-6. **UI.**
-7. **Ansible deployment** into the homelab.
+5. **Scheduler daemon** wrapping `apply()`. ✅
+6. **UI.** ← next
+7. **Ansible deployment** into the homelab. ✅ live on mm7, behind Traefik at
+   `doorbell.linkinlark.co.uk`, 26 themes seeded, rolling at 04:00.
 
 ## Experiments to run first
 
@@ -248,6 +267,39 @@ In order of how much they would save:
 3. **Set `ringVolume` to 0** and confirm it is silent rather than quiet.
 
 All three need an API key: Protect → Settings → Control Plane → Integrations.
+
+## Lessons from the first live deployment
+
+Three faults that all shared a shape: the system reported success while
+quietly not doing the job.
+
+1. **`src/media/` was never committed.** The `.gitignore` rule `media/` was
+   unanchored, so it matched `src/media/` as well as the media library.
+   `check` and `fit` shipped to the container without the module they import,
+   and `tests/analyse.test.ts` was committed while its dependency was not —
+   so a fresh clone could not run its own test suite. Locally everything
+   passed, and `git status` stayed clean. **Anchor ignore rules that mean a
+   top-level directory with a leading slash.**
+
+2. **A theme with no sound inherited the previous theme's ringtone.** "Leave
+   it alone" sounds conservative and is not: the image rotates daily and the
+   ringtone does not, so setting Halloween once meant every everyday GIF for
+   the rest of the year answered the door with a haunted-mansion organ. The
+   image/sound pairing this app exists to guarantee stops holding silently.
+   "No sound" now means the default one.
+
+3. **The skip-unchanged path returned before touching the sound.** The two
+   halves are set through different APIs and drift independently, so a
+   correct image is no evidence of a correct ringtone — and once they
+   disagreed, nothing could repair it, because every roll saw the right
+   picture and returned. This one hid the fix for (2) completely: the
+   fallback was correct, and the code path that would apply it was
+   unreachable. **A reconciler must reconcile every half it owns on every
+   run, not only the half that happened to change.**
+
+The first two were found by running the thing against real hardware, not by
+reading it. Consistent with the note in the homelab's own docs that restore
+paths rot silently for exactly the same reason.
 
 ## Risks
 
