@@ -65,6 +65,10 @@ export class DirectoryAssetSource implements AssetSource {
     const entries = await readdir(this.#directory, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile()) continue;
+      // macOS writes `._name.gif` AppleDouble forks into shared folders. They
+      // carry a .gif extension and contain no image, so an extension check
+      // alone lets them through and they upload as corrupt assets.
+      if (entry.name.startsWith(".")) continue;
       if (!(extname(entry.name).toLowerCase() in MIME_BY_EXTENSION)) continue;
       const bytes = await readFile(join(this.#directory, entry.name));
       index.set(hashBytes(bytes), entry.name);
