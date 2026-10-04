@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { extname, join } from "node:path";
-import type { AssetSource, ImageDevice } from "../apply.ts";
+import type { AssetSource, ImageDevice, SoundDevice } from "../apply.ts";
+import type { PrivateApi } from "./private.ts";
 import { hashBytes } from "../apply.ts";
 import type { Protect } from "./protect.ts";
 
@@ -98,7 +99,43 @@ export class DirectoryAssetSource implements AssetSource {
     return { name: asset.name, size: asset.size };
   }
 
-  async listRemote(): Promise<string[]> {
-    return (await this.#protect.animations()).map((a) => a.name);
+  async listRemote(): Promise<Array<{ name: string; originalName: string }>> {
+    return (await this.#protect.animations()).map((a) => ({
+      name: a.name,
+      originalName: a.originalName,
+    }));
+  }
+
+  async localFiles(): Promise<Map<string, string>> {
+    return this.index();
+  }
+}
+
+/**
+ * The ring sound, over the private API.
+ *
+ * Reads the whole speakerSettings object to find the current ringtone rather
+ * than caching it, because the Protect app can change it too and a stale
+ * cache would mean rewriting a setting that is already correct - a pointless
+ * write to an undocumented endpoint.
+ */
+export class ProtectSoundDevice implements SoundDevice {
+  readonly #api: PrivateApi;
+  readonly #cameraId: string;
+
+  constructor(api: PrivateApi, cameraId: string) {
+    this.#api = api;
+    this.#cameraId = cameraId;
+  }
+
+  async currentRingtone(): Promise<string | null> {
+    return (await this.#api.speakerSettings(this.#cameraId)).ringtoneId ?? null;
+  }
+
+  async setRingtone(ringtoneId: string): Promise<void> {
+    // The PATCH merges, so ringVolume and speakerVolume survive untouched -
+    // verified on hardware. A sound change must never silently reset a
+    // volume someone set by hand.
+    await this.#api.setRingtone(this.#cameraId, ringtoneId);
   }
 }

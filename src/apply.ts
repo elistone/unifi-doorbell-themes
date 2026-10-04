@@ -24,6 +24,21 @@ export interface ImageDevice {
   showImage(assetName: string): Promise<void>;
 }
 
+/**
+ * Choosing what the visitor hears.
+ *
+ * Separate from ImageDevice because the two halves live on different APIs
+ * with different credentials: images on the documented Integration API with
+ * a read-scoped key, sound on the private API with an admin login. Keeping
+ * them apart means a Protect upgrade that breaks the private API leaves the
+ * image half working, and an images-only install needs no admin credentials
+ * at all.
+ */
+export interface SoundDevice {
+  currentRingtone(): Promise<string | null>;
+  setRingtone(ringtoneId: string): Promise<void>;
+}
+
 /** Where media comes from, and how it reaches the NVR. */
 export interface AssetSource {
   /** Raw bytes for a content hash, or null if the file has gone missing. */
@@ -33,8 +48,10 @@ export interface AssetSource {
     filename: string,
     mimeType: string,
   ): Promise<{ name: string; size: number }>;
-  /** Asset names the NVR currently holds, for reconciling the manifest. */
-  listRemote(): Promise<string[]>;
+  /** What the NVR currently holds, for reconciling and adopting. */
+  listRemote(): Promise<Array<{ name: string; originalName: string }>>;
+  /** Local media, as content hash -> filename. */
+  localFiles(): Promise<Map<string, string>>;
 }
 
 export interface Notifier {
@@ -48,6 +65,10 @@ export interface ApplyResult {
   themeId: string | null;
   themeName: string | null;
   assetName: string | null;
+  /** The ringtone that was set, when the theme names one. */
+  ringtoneId?: string | null;
+  /** Whether the sound half actually changed, was already right, or was skipped. */
+  sound?: "applied" | "unchanged" | "skipped" | "failed";
   /**
    * Set when the device was showing something other than what we last set -
    * someone changed it through Protect, or a reboot reset it.
@@ -73,6 +94,7 @@ export async function apply(
   now: Date,
   options: ApplyOptions = {},
   notifier?: Notifier,
+  sound?: SoundDevice,
 ): Promise<ApplyResult> {
   const { dryRun = false, skipUnchanged = true } = options;
   const at = now.toISOString();
@@ -170,12 +192,39 @@ export async function apply(
     store.setLastAppliedAsset(assetName);
     store.setCursor(decision.cursor);
 
+    // Sound is best-effort and deliberately cannot fail the apply.
+    //
+    // It lives on the private API, which breaks between major Protect
+    // releases - so when it goes, the image half must carry on rather than
+    // the whole scheduler stopping. A doorbell showing the right picture with
+    // the wrong chime is a far better failure than one stuck on December's
+    // GIF in March.
+    let soundOutcome: ApplyResult["sound"] = theme.sound ? "skipped" : undefined;
+    if (theme.sound && sound) {
+      try {
+        const current = await sound.currentRingtone();
+        if (current === theme.sound) {
+          soundOutcome = "unchanged";
+        } else {
+          await sound.setRingtone(theme.sound);
+          soundOutcome = "applied";
+        }
+      } catch {
+        soundOutcome = "failed";
+      }
+    }
+
     return finish({
       outcome: "applied",
-      reason: decision.reason,
+      reason:
+        soundOutcome === "failed"
+          ? `${decision.reason}; image set, ringtone failed`
+          : decision.reason,
       themeId: theme.id,
       themeName: theme.name,
       assetName,
+      ringtoneId: theme.sound ?? null,
+      sound: soundOutcome,
       drift,
     });
   } catch (error) {
@@ -238,5 +287,46 @@ export function hashBytes(bytes: Uint8Array): string {
  * the scheduler not working rather than a missing file.
  */
 export async function reconcile(store: Store, source: AssetSource): Promise<string[]> {
-  return store.reconcileAssets(new Set(await source.listRemote()));
+  return store.reconcileAssets(new Set((await source.listRemote()).map((a) => a.name)));
+}
+
+/**
+ * Claim assets the NVR already has, instead of uploading them again.
+ *
+ * Anyone installing this already has images on their doorbell - they put
+ * them there through Protect, which is why they want something better. On
+ * first run the manifest is empty, so every one of those gets uploaded a
+ * second time. That was not theoretical: the first live run duplicated a
+ * 395KB dancing-bones that was already sitting there.
+ *
+ * Matching is by `originalName`, since Protect keeps the filename you
+ * uploaded (as "<name>.png"). That is a HEURISTIC, not identity - an asset
+ * called dancing-bones.gif.png on the NVR might be a different cut of the
+ * same GIF. The cost of being wrong is showing a slightly different
+ * animation than expected; the cost of not doing it is duplicating someone's
+ * entire library. Returns what it adopted so the caller can say so out loud.
+ */
+export async function adopt(store: Store, source: AssetSource): Promise<Array<{ filename: string; assetName: string }>> {
+  const remote = await source.listRemote();
+  const local = await source.localFiles();
+  const adopted: Array<{ filename: string; assetName: string }> = [];
+
+  for (const [hash, filename] of local) {
+    if (store.asset(hash)) continue;
+    // Protect stores a GIF as "<original>.png" and its preview as
+    // "<original>.png.gif"; only the sprite is a candidate.
+    const match = remote.find(
+      (a) => a.originalName === `${filename}.png` && !a.name.endsWith(".gif"),
+    );
+    if (!match) continue;
+    store.recordAsset({
+      hash,
+      assetName: match.name,
+      originalName: match.originalName,
+      size: null,
+      uploadedAt: new Date().toISOString(),
+    });
+    adopted.push({ filename, assetName: match.name });
+  }
+  return adopted;
 }

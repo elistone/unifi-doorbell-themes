@@ -7,8 +7,9 @@
  * The daemon will call the same `apply()` on a timer. Keeping this a thin
  * wrapper is what stops the preview and the real thing drifting apart.
  */
-import { apply, reconcile } from "../apply.ts";
-import { DirectoryAssetSource, ProtectImageDevice } from "../device/adapter.ts";
+import { adopt, apply, reconcile } from "../apply.ts";
+import { DirectoryAssetSource, ProtectImageDevice, ProtectSoundDevice } from "../device/adapter.ts";
+import { PrivateApi } from "../device/private.ts";
 import { Protect } from "../device/protect.ts";
 import { Store } from "../store/db.ts";
 
@@ -50,6 +51,16 @@ const store = new Store(dbPath);
 const device = new ProtectImageDevice(protect, cameraId);
 const source = new DirectoryAssetSource(mediaDir, protect);
 
+// Sound is optional. Without admin credentials the app runs images-only,
+// which uses nothing but the documented API - a legitimate way to run this,
+// not a degraded mode.
+const adminUser = process.env.PROTECT_ADMIN_USER;
+const adminPass = process.env.PROTECT_ADMIN_PASS;
+const sound =
+  adminUser && adminPass
+    ? new ProtectSoundDevice(new PrivateApi({ host, username: adminUser, password: adminPass }), cameraId)
+    : undefined;
+
 await protect.assertSupportedVersion();
 
 // Someone may have deleted an image through Protect's own UI since last run.
@@ -60,9 +71,21 @@ for (const name of dropped) {
   console.log(`forgot ${name} - no longer on the NVR`);
 }
 
-const result = await apply(store, device, source, at, { dryRun });
+// Claim anything already on the NVR before uploading a second copy of it.
+const claimed = await adopt(store, source);
+for (const { filename, assetName } of claimed) {
+  console.log(`adopted ${filename} -> ${assetName} (already on the NVR)`);
+}
+
+const result = await apply(store, device, source, at, { dryRun }, undefined, sound);
 
 console.log(`${result.outcome}: ${result.reason}`);
+if (result.sound) {
+  console.log(`  ringtone: ${result.sound}${result.ringtoneId ? ` (${result.ringtoneId})` : ""}`);
+}
+if (result.sound === "skipped") {
+  console.log("  (set PROTECT_ADMIN_USER and PROTECT_ADMIN_PASS to control the ring sound)");
+}
 if (result.drift) {
   console.log(
     `  drift: expected ${result.drift.expected}, found ${result.drift.found} ` +

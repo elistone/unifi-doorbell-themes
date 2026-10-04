@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { beforeEach, describe, it } from "node:test";
-import { apply, ensureUploaded, reconcile } from "../src/apply.ts";
+import { adopt, apply, ensureUploaded, reconcile } from "../src/apply.ts";
 import type { AssetSource, ImageDevice } from "../src/apply.ts";
 import { Store } from "../src/store/db.ts";
 import type { Theme } from "../src/domain/types.ts";
@@ -56,11 +56,21 @@ class FakeSource implements AssetSource {
     this.uploads++;
     const name = `asset-${++this.#next}.png`;
     this.remote.add(name);
+    this.originalNames.set(name, `${_filename}.png`);
     return { name, size: 1234 };
   }
 
+  originalNames = new Map<string, string>();
+
   async listRemote() {
-    return [...this.remote];
+    return [...this.remote].map((name) => ({
+      name,
+      originalName: this.originalNames.get(name) ?? name,
+    }));
+  }
+
+  async localFiles() {
+    return new Map([...this.files].map(([hash, f]) => [hash, f.filename]));
   }
 }
 
@@ -312,5 +322,125 @@ describe("a dry run must change nothing, anywhere", () => {
     const dry = await apply(store, device, source, now, { dryRun: true });
     assert.equal(source.uploads, uploadsAfterReal);
     assert.equal(dry.assetName, device.showing);
+  });
+});
+
+class FakeSound {
+  current: string | null = null;
+  writes = 0;
+  failNext = false;
+  async currentRingtone() { return this.current; }
+  async setRingtone(id: string) {
+    if (this.failNext) { this.failNext = false; throw new Error("private API said no"); }
+    this.current = id;
+    this.writes++;
+  }
+}
+
+describe("sound", () => {
+  it("sets the ringtone alongside the image", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "ringtone-elf" });
+
+    const result = await apply(store, device, source, now, {}, undefined, sound);
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.sound, "applied");
+    assert.equal(sound.current, "ringtone-elf");
+  });
+
+  it("does not rewrite a ringtone that is already set", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    sound.current = "ringtone-elf";
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "ringtone-elf" });
+
+    const result = await apply(store, device, source, now, {}, undefined, sound);
+    assert.equal(result.sound, "unchanged");
+    assert.equal(sound.writes, 0);
+  });
+
+  it("leaves the ring sound alone when a theme names none", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    sound.current = "whatever-was-there";
+    store.upsertTheme(theme("images-only", "hash-a"));
+
+    const result = await apply(store, device, source, now, {}, undefined, sound);
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.sound, undefined);
+    assert.equal(sound.current, "whatever-was-there", "an imageless theme must not clear the sound");
+  });
+
+  it("still applies the image when the sound half fails", async () => {
+    // Sound lives on the private API, which breaks between Protect releases.
+    // A doorbell showing the right picture with the wrong chime beats one
+    // stuck on December's GIF in March.
+    source.add("hash-a");
+    const sound = new FakeSound();
+    sound.failNext = true;
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "ringtone-elf" });
+
+    const result = await apply(store, device, source, now, {}, undefined, sound);
+    assert.equal(result.outcome, "applied", "the image must still go up");
+    assert.equal(result.sound, "failed");
+    assert.equal(device.showing, result.assetName);
+    assert.match(result.reason, /ringtone failed/);
+  });
+
+  it("reports the theme named a sound but no sound device was configured", async () => {
+    // Images-only installs have no admin credentials, so this is normal.
+    source.add("hash-a");
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "ringtone-elf" });
+    const result = await apply(store, device, source, now);
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.sound, "skipped");
+  });
+});
+
+
+describe("adopting what is already on the NVR", () => {
+  it("claims a matching asset instead of uploading a duplicate", async () => {
+    // Everyone installing this already has images on their doorbell - that is
+    // why they want something better. Re-uploading the lot on first run is a
+    // real cost, and it happened on the first live run.
+    source.add("hash-a", "dancing-bones.gif");
+    source.remote.add("existing-asset.png");
+    source.originalNames.set("existing-asset.png", "dancing-bones.gif.png");
+
+    const claimed = await adopt(store, source);
+    assert.deepEqual(claimed, [{ filename: "dancing-bones.gif", assetName: "existing-asset.png" }]);
+    assert.equal(store.asset("hash-a")?.assetName, "existing-asset.png");
+
+    await ensureUploaded(store, source, "hash-a");
+    assert.equal(source.uploads, 0, "an adopted asset must never be uploaded");
+  });
+
+  it("ignores the .gif preview and claims the sprite", async () => {
+    source.add("hash-a", "stitch_hi.gif");
+    source.remote.add("sprite.png");
+    source.remote.add("sprite.png.gif");
+    source.originalNames.set("sprite.png", "stitch_hi.gif.png");
+    source.originalNames.set("sprite.png.gif", "stitch_hi.gif.png");
+
+    const claimed = await adopt(store, source);
+    assert.equal(claimed[0]?.assetName, "sprite.png", "the preview is not the asset to display");
+  });
+
+  it("leaves already-known assets alone", async () => {
+    source.add("hash-a", "x.gif");
+    await ensureUploaded(store, source, "hash-a");
+    const before = store.asset("hash-a")!.assetName;
+    source.remote.add("other.png");
+    source.originalNames.set("other.png", "x.gif.png");
+    assert.deepEqual(await adopt(store, source), []);
+    assert.equal(store.asset("hash-a")?.assetName, before);
+  });
+
+  it("adopts nothing when no name matches", async () => {
+    source.add("hash-a", "unique.gif");
+    source.remote.add("unrelated.png");
+    source.originalNames.set("unrelated.png", "something-else.gif.png");
+    assert.deepEqual(await adopt(store, source), []);
   });
 });

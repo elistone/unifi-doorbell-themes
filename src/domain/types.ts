@@ -43,7 +43,20 @@ export interface Theme {
   name: string;
   /** Content hash of the image. Resolved to an uploaded asset name elsewhere. */
   image: string;
-  /** Content hash of the sound. May be absent while the sound layer is unproven. */
+  /**
+   * Ringtone id on the NVR, e.g. "6933fcd40050f903e46e1a88".
+   *
+   * An id rather than a content hash, which is the opposite of how `image`
+   * works, and the asymmetry is forced by the device: animations are
+   * uncapped so each one can be uploaded once and kept forever, but
+   * ringtones are capped at 12. A local sound library larger than that
+   * would mean uploading and evicting on every rotation - churn against an
+   * undocumented endpoint, to save a few hundred KB on a terabyte NVR.
+   *
+   * So sounds are chosen from what is already on the controller, and
+   * uploading a new one is a deliberate act rather than a side effect of
+   * scheduling. Omit it and the theme leaves the ring sound alone.
+   */
   sound?: string;
   /**
    * Higher wins. Themes at a lower priority are not candidates at all when a
