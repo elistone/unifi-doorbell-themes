@@ -5,6 +5,25 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- `themes.ts devices` — list, add, rename, enable, disable and remove
+  doorbells from the command line, referring to them by name or by id.
+  Adding one checks the controller actually has that camera, so a typo is
+  an error now rather than a doorbell that silently fails every roll.
+- `themes.ts add --doorbells "Front,Back"` scopes a theme. Omitted means
+  every doorbell, matching the UI. An ambiguous name is rejected rather
+  than guessed.
+- `themes.ts list` shows which doorbells each theme applies to, once there
+  is more than one.
+- `probe` marks which discovered cameras are already configured, and warns
+  about **configured doorbells the controller no longer has** — the case
+  that otherwise fails every roll with no other symptom.
+- Icons throughout the UI: the nav, the action buttons and the doorbell
+  rows. Inline SVG that inherits the current text colour, so one copy
+  works on light, dark and the selected tab. Below 860px the nav labels
+  give way to icons alone rather than wrapping to a second row.
+
 ## 0.4.0 - 2026-10-04
 
 ### Added

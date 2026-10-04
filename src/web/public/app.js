@@ -107,6 +107,28 @@ async function withBusy(button, fn) {
 /** The submit button of a form, for busyWhile. */
 const submitter = (form) => form.querySelector('button[type="submit"]');
 
+/**
+ * Line icons, as strings so they can go straight into a template.
+ *
+ * Inline rather than a sprite or a font: there are a dozen of them, they
+ * inherit `currentColor` so one copy works on every background, and the
+ * alternative is a network request for something smaller than its own
+ * HTTP headers.
+ */
+const ICONS = {
+  add: '<path d="M8 3.2v9.6M3.2 8h9.6"/>',
+  upload: '<path d="M8 10.8V2.4M4.6 5.8 8 2.4l3.4 3.4"/><path d="M2.6 10.6v2a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-2"/>',
+  play: '<path d="M4.4 2.8 12.6 8l-8.2 5.2V2.8Z"/>',
+  eye: '<path d="M1.3 8S3.9 3.4 8 3.4 14.7 8 14.7 8 12.1 12.6 8 12.6 1.3 8 1.3 8Z"/><circle cx="8" cy="8" r="1.9"/>',
+  trash: '<path d="M2.6 4.2h10.8M6 4.2V2.9a.9.9 0 0 1 .9-.9h2.2a.9.9 0 0 1 .9.9v1.3M12 4.2v8.9a.9.9 0 0 1-.9.9H4.9a.9.9 0 0 1-.9-.9V4.2"/>',
+  edit: '<path d="M11.1 2.2a1.6 1.6 0 0 1 2.3 2.3L5.1 12.8l-3.1.8.8-3.1Z"/>',
+  bell: '<path d="M8 1.9a4.2 4.2 0 0 0-4.2 4.2c0 2.4-.6 3.8-1 4.6a.5.5 0 0 0 .4.8h9.6a.5.5 0 0 0 .4-.8c-.4-.8-1-2.2-1-4.6A4.2 4.2 0 0 0 8 1.9Z"/><path d="M6.5 13.2a1.6 1.6 0 0 0 3 0"/>',
+  shrink: '<path d="M6.4 9.6 2.4 13.6M6.4 13.6v-4h-4M9.6 6.4l4-4M9.6 2.4v4h4"/>',
+  power: '<path d="M8 2.4v5.2"/><path d="M11.6 4.3a5 5 0 1 1-7.2 0"/>',
+};
+
+const icon = (name) => `<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
+
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function describeRule(rule) {
@@ -287,7 +309,7 @@ function doorbellCard(d) {
           <strong style="font-size:16px">${esc(d.name)}</strong>
           ${d.enabled ? "" : `<span class="badge mute">disabled</span>`}
           <div class="spacer"></div>
-          <button class="btn small" data-apply-device="${esc(d.id)}">Apply now</button>
+          <button class="btn small" data-apply-device="${esc(d.id)}">${icon("play")}Apply now</button>
         </div>
         <dl class="kv">
           <dt>Image</dt><dd>${esc(d.showing.filename ?? d.showing.assetName ?? "nothing")}</dd>
@@ -389,7 +411,7 @@ async function renderSettings() {
             const all = themeList.filter((t) => t.devices.length === 0).length;
             return `
             <div class="theme ${d.enabled ? "" : "off"}">
-              <div class="noimg" style="font-size:20px">🔔</div>
+              <div class="noimg device-glyph">${icon("bell")}</div>
               <div>
                 <div class="name">
                   ${esc(d.name)}
@@ -399,9 +421,9 @@ async function renderSettings() {
                 <div class="meta">${all + scoped} themes apply here${scoped > 0 ? ` (${scoped} only here)` : ""}</div>
               </div>
               <div class="row">
-                <button class="btn small" data-rename="${esc(d.id)}">Rename</button>
-                <button class="btn small" data-toggle-device="${esc(d.id)}">${d.enabled ? "Disable" : "Enable"}</button>
-                <button class="btn small danger" data-remove-device="${esc(d.id)}">Remove</button>
+                <button class="btn small" data-rename="${esc(d.id)}">${icon("edit")}Rename</button>
+                <button class="btn small" data-toggle-device="${esc(d.id)}">${icon("power")}${d.enabled ? "Disable" : "Enable"}</button>
+                <button class="btn small danger" data-remove-device="${esc(d.id)}">${icon("trash")}Remove</button>
               </div>
             </div>`;
           })
@@ -634,7 +656,7 @@ async function renderThemes() {
             }
           </div>
         </div>
-        <button class="btn small" data-edit="${esc(theme.id)}">Edit</button>
+        <button class="btn small" data-edit="${esc(theme.id)}">${icon("edit")}Edit</button>
       </div>`;
     })
     .join("");
@@ -849,8 +871,8 @@ async function renderMedia() {
           ${m.inUse ? `<div class="facts"><span class="badge mute">used by a theme</span></div>` : ""}
           ${m.verdict && m.verdict !== "safe" ? `<div class="facts" style="font-size:11.5px">${esc(m.advice ?? "")}</div>` : ""}
           <div class="acts">
-            ${m.verdict === "likely-fails" ? `<button class="btn small" data-fit="${esc(m.filename)}">Shrink</button>` : ""}
-            <button class="btn small danger" data-del-media="${esc(m.filename)}" ${m.inUse ? "disabled title='Used by a theme'" : ""}>Delete</button>
+            ${m.verdict === "likely-fails" ? `<button class="btn small" data-fit="${esc(m.filename)}">${icon("shrink")}Shrink</button>` : ""}
+            <button class="btn small danger" data-del-media="${esc(m.filename)}" ${m.inUse ? "disabled title='Used by a theme'" : ""}>${icon("trash")}Delete</button>
           </div>
         </div>
       </div>`;
@@ -938,7 +960,7 @@ async function renderSounds() {
         <td class="mono">${esc(r.id)}</td>
         <td>${r.inUse ? `<span class="badge ok">in use</span>` : ""}</td>
         <td style="text-align:right">
-          ${r.isDefault ? "" : `<button class="btn small danger" data-del-sound="${esc(r.id)}" data-name="${esc(r.name)}">Delete</button>`}
+          ${r.isDefault ? "" : `<button class="btn small danger" data-del-sound="${esc(r.id)}" data-name="${esc(r.name)}">${icon("trash")}Delete</button>`}
         </td>
       </tr>`,
     )

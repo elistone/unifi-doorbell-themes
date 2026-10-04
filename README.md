@@ -127,6 +127,28 @@ to it is **disabled** rather than quietly spread across the others — the one
 case where "no doorbells" would otherwise flip from "just that one" to "all
 of them".
 
+### From the command line
+
+`probe` reports which cameras are configured as doorbells and — more
+usefully — which configured doorbells the controller no longer has, since
+that one fails every roll with no other symptom.
+
+```bash
+node src/cli/themes.ts devices                      # list them
+node src/cli/themes.ts devices add <camera-id> "Front door"
+node src/cli/themes.ts devices rename "Front door" "Porch"
+node src/cli/themes.ts devices disable "Porch"
+node src/cli/themes.ts devices remove "Porch"
+
+# Scope a theme, by name or id
+node src/cli/themes.ts add --id xmas --image Elf_santa.gif \
+     --dates 12-01..12-26 --doorbells "Front door,Back door"
+```
+
+Omitting `--doorbells` means every doorbell, matching the UI. An ambiguous
+name is an error rather than a guess — silently scoping a theme to the wrong
+door is not a mistake you notice until the wrong GIF is on the wrong door.
+
 ## Running it for real
 
 ### Docker

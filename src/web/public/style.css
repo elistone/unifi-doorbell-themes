@@ -120,9 +120,39 @@ nav button {
   color: var(--text-dim);
   font: inherit;
   font-weight: 550;
-  padding: 7px 13px;
+  padding: 7px 12px;
   border-radius: 7px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* Line icons rather than emoji.
+ *
+ * Emoji render as a different picture on every platform, arrive in their
+ * own colours, and cannot follow the current text colour - which matters
+ * here because the selected tab inverts. These are strokes that inherit
+ * `currentColor`, so one rule handles light, dark and selected. */
+nav button svg,
+#account svg,
+#toggle-theme svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Below this the labels would wrap onto a second row and push the content
+   down; the icons alone still distinguish seven tabs. */
+@media (max-width: 860px) {
+  nav button span { display: none; }
+  nav button { padding: 8px 10px; }
+  nav button svg { width: 17px; height: 17px; }
 }
 nav button:hover { background: var(--surface-2); color: var(--text); }
 nav button[aria-current="page"] { background: var(--accent); color: var(--accent-text); }
@@ -642,3 +672,28 @@ input[type="password"] {
 .tile:hover .thumb .play { opacity: 0; }
 
 .theme img { object-fit: cover; }
+
+/* ------------------------------------------------------------- icons */
+
+/* Sized in em so an icon tracks the text beside it - the same markup is
+   used in full-size and .small buttons. */
+.ico {
+  width: 1.05em;
+  height: 1.05em;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* A filled glyph reads better than an outline at this size, and the play
+   triangle is the one shape that looks broken hollow. */
+.btn .ico[viewBox] path[d^="M4.4 2.8"] { fill: currentColor; }
+
+.device-glyph .ico { width: 22px; height: 22px; color: var(--text-dim); stroke-width: 1.3; }
+
+/* Icon-only buttons should be square rather than inheriting the padding
+   of one that has a label. */
+#toggle-theme { padding: 7px 9px; }
