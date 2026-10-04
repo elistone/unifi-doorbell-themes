@@ -5,6 +5,36 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **More than one doorbell.** Doorbells are now rows in the database with
+  names you choose, managed in a new **Settings** tab: discover them from
+  the controller, rename, disable or remove. `PROTECT_CAMERA_ID` becomes
+  the bootstrap for the first one, so a headless install is unchanged.
+- **Themes can be scoped to doorbells** with *Applies to*. Empty means
+  every doorbell — the default that stops adding a second one silently
+  unscheduling the first.
+- Each doorbell rotates **independently**: the random pick is seeded by the
+  date and the doorbell, so two doors sharing a library do not show the
+  same GIF every day. Still deterministic, so the calendar preview is still
+  exact.
+- The dashboard shows a card per doorbell, each with its own Apply button;
+  the calendar has a doorbell picker; history records which one.
+- **Settings** also holds the selection mode, the hour themes change, and
+  the default ring sound. Each falls back to its environment variable and
+  says which it is currently using.
+
+### Changed
+
+- Rotation state — the cursor, what was last set, the audit trail — is now
+  per doorbell. Images are still uploaded once and shared, because the
+  asset lives on the NVR that all of them read from.
+- A roll only counts as done when every doorbell succeeded, so a partial
+  failure stays retryable instead of leaving one door on yesterday.
+- **Your existing rotation will pick a different GIF today.** The device id
+  is part of the random seed now, which changes the sequence once. The
+  schedule and every theme are untouched.
+
 ## 0.3.1 - 2026-10-04
 
 ### Fixed

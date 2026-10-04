@@ -16,7 +16,20 @@ import type {
  * and this is the only way to ask "what happens on 24 December 2027" without
  * waiting until then.
  */
-export function decide(config: Config, now: Date, cursor: Cursor = {}): Decision {
+export function decide(
+  config: Config,
+  now: Date,
+  cursor: Cursor = {},
+  /**
+   * Mixed into the random seed, so each doorbell rotates independently.
+   *
+   * Without it two doorbells with the same themes pick the same GIF every
+   * day, which looks like a bug rather than a choice. Pass the device id.
+   * It stays deterministic - the same door on the same date is still the
+   * same answer, which is what lets the calendar predict a year ahead.
+   */
+  salt = "",
+): Decision {
   const eligible = config.themes.filter(
     (t) => t.enabled && t.rules.some((r) => ruleMatches(r, now)),
   );
@@ -66,7 +79,7 @@ export function decide(config: Config, now: Date, cursor: Cursor = {}): Decision
   // Seeded by the local date, so the choice is stable for the whole day and a
   // dry run predicts exactly what the daemon will do.
   const day = localDateKey(now);
-  const index = hash(`${day}:${key}`) % candidates.length;
+  const index = hash(`${day}:${salt}:${key}`) % candidates.length;
   const picked = candidates[index]!;
   return {
     theme: picked,

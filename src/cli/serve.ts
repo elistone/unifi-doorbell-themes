@@ -20,21 +20,30 @@ import { createHandler } from "../web/router.ts";
 
 const host = process.env.PROTECT_HOST;
 const apiKey = process.env.PROTECT_API_KEY;
-const cameraId = process.env.PROTECT_CAMERA_ID;
-if (!host || !apiKey || !cameraId) {
-  console.error("Set PROTECT_HOST, PROTECT_API_KEY and PROTECT_CAMERA_ID. See .env.example.");
+// Doorbells live in the database now. This is the bootstrap for the first
+// one, so a headless install still works without opening the UI - after
+// that, doorbells are added and named from Settings.
+const bootstrapCameraId = process.env.PROTECT_CAMERA_ID;
+if (!host || !apiKey) {
+  console.error("Set PROTECT_HOST and PROTECT_API_KEY. See .env.example.");
   process.exit(1);
 }
 
 const port = Number(process.env.PORT ?? 8080);
 const tickSeconds = Number(process.env.DOORMAN_TICK_SECONDS ?? 300);
-/** Local hour to roll at. 4am by default: nobody is at the door. */
-const rollHour = Number(process.env.DOORMAN_ROLL_HOUR ?? 4);
+
+/**
+ * Settings read fresh each tick rather than captured at boot, so changing
+ * one in the UI takes effect without restarting the container. The
+ * environment variable stays the default for a headless install.
+ */
+const rollHour = () => Number(store.setting("rollHour") ?? process.env.DOORMAN_ROLL_HOUR ?? 4);
+const defaultRingtone = () =>
+  store.setting("defaultRingtone") ?? process.env.DOORMAN_DEFAULT_RINGTONE ?? undefined;
 
 const protect = new Protect({ host, apiKey, insecureTls: process.env.PROTECT_INSECURE_TLS !== "false" });
 const dbPath = process.env.DOORMAN_DB ?? "data/doorman.sqlite";
 const store = new Store(dbPath);
-const device = new ProtectImageDevice(protect, cameraId);
 const source = new DirectoryAssetSource(process.env.DOORMAN_MEDIA ?? "media", protect);
 
 const adminUser = process.env.PROTECT_ADMIN_USER;
@@ -45,7 +54,7 @@ const priv =
   adminUser && adminPass
     ? new PrivateApi({ host, username: adminUser, password: adminPass })
     : undefined;
-const sound = priv ? new ProtectSoundDevice(priv, cameraId) : undefined;
+
 
 const notifier = process.env.NOTIFY_URL
   ? new HttpNotifier({ url: process.env.NOTIFY_URL, method: process.env.NOTIFY_METHOD })
@@ -54,7 +63,38 @@ const notifier = process.env.NOTIFY_URL
 const log = (message: string) => console.log(`[${new Date().toISOString()}] ${message}`);
 
 const protectVersion = await protect.assertSupportedVersion();
-log(`doorman ${VERSION} - Protect ${protectVersion}, camera ${cameraId}, sound ${sound ? "enabled" : "disabled (no admin credentials)"}`);
+log(
+  `doorman ${VERSION} - Protect ${protectVersion}, sound ${priv ? "enabled" : "disabled (no admin credentials)"}`,
+);
+
+/**
+ * Adopt the configured camera as the first doorbell.
+ *
+ * Only when there are none at all, so this cannot resurrect a doorbell
+ * someone deliberately removed, and cannot fight the UI once it is the
+ * source of truth. Its name comes from Protect if that call works, because
+ * "Front Doorbell" beats a 24-character hex id on first sight.
+ */
+if (bootstrapCameraId && store.devices().length === 0) {
+  let name = "Doorbell";
+  try {
+    const found = (await protect.cameras()).find((c) => c.id === bootstrapCameraId);
+    if (found?.name) name = found.name;
+  } catch {
+    // Naming is cosmetic; a failure here must not stop the service coming up.
+  }
+  store.upsertDevice({ id: bootstrapCameraId, name, enabled: true, position: 0 });
+  log(`adopted ${name} (${bootstrapCameraId}) from PROTECT_CAMERA_ID`);
+}
+
+/** The devices this run should drive, rebuilt each tick so the UI is live. */
+function activeDevices() {
+  return store.devices().filter((d) => d.enabled);
+}
+
+const imageDeviceFor = (id: string) => new ProtectImageDevice(protect, id);
+const soundDeviceFor = (id: string) =>
+  priv ? new ProtectSoundDevice(priv, id) : undefined;
 
 if (store.userCount() === 0) {
   log("no account yet - open the UI to create one; until then it is unconfigured");
@@ -78,33 +118,66 @@ async function tick(): Promise<void> {
   if (store.lastRolledDate() === today) return;
   // Wait for the roll hour, unless we have never rolled (fresh install should
   // put something on the doorbell immediately rather than tomorrow morning).
-  if (store.lastRolledDate() !== null && now.getHours() < rollHour) return;
+  if (store.lastRolledDate() !== null && now.getHours() < rollHour()) return;
+
+  const devices = activeDevices();
+  if (devices.length === 0) {
+    // Not an error, and not worth retrying every tick: there is simply
+    // nothing configured to drive yet.
+    return;
+  }
 
   try {
     const dropped = await reconcile(store, source);
     for (const name of dropped) log(`forgot ${name} - no longer on the NVR`);
-
-    const result = await apply(
-      store,
-      device,
-      source,
-      now,
-      { defaultSound: process.env.DOORMAN_DEFAULT_RINGTONE },
-      notifier,
-      sound,
-    );
-    store.setLastRolledDate(today);
-    log(`${result.outcome}: ${result.reason}${result.sound ? ` [ringtone ${result.sound}]` : ""}`);
-    if (result.drift) {
-      log(`  drift: expected ${result.drift.expected}, device had ${result.drift.found} - left alone`);
-    }
   } catch (error) {
-    // Do NOT record the date on failure, so the next tick retries rather than
-    // waiting until tomorrow.
-    const message = error instanceof Error ? error.message : String(error);
-    log(`roll failed: ${message}`);
-    await notifier?.post("down", `roll failed: ${message}`).catch(() => {});
+    // Reconciliation is housekeeping. A failure here should not stop the
+    // doorbells being updated.
+    log(`could not reconcile the manifest: ${error instanceof Error ? error.message : error}`);
   }
+
+  // One doorbell failing must not stop the others. Rolled in sequence
+  // rather than in parallel on purpose: these all hit one NVR, and an
+  // upload is heavy enough there that doing several at once is how you
+  // find out what its request limit is.
+  let failures = 0;
+  for (const target of devices) {
+    try {
+      const result = await apply(
+        store,
+        imageDeviceFor(target.id),
+        source,
+        now,
+        {
+          defaultSound: defaultRingtone(),
+          deviceId: target.id,
+          deviceName: target.name,
+        },
+        notifier,
+        soundDeviceFor(target.id),
+      );
+      log(
+        `${target.name}: ${result.outcome}: ${result.reason}` +
+          `${result.sound ? ` [ringtone ${result.sound}]` : ""}`,
+      );
+      if (result.outcome === "failed") failures++;
+      if (result.drift) {
+        log(
+          `  ${target.name} drift: expected ${result.drift.expected}, device had ${result.drift.found} - left alone`,
+        );
+      }
+    } catch (error) {
+      failures++;
+      const message = error instanceof Error ? error.message : String(error);
+      log(`${target.name}: roll failed: ${message}`);
+      await notifier?.post("down", `${target.name}: roll failed: ${message}`).catch(() => {});
+    }
+  }
+
+  // Only call the day done when every doorbell got its turn. Recording it
+  // after a partial failure would leave one door stuck on yesterday until
+  // tomorrow, with nothing retrying.
+  if (failures === 0) store.setLastRolledDate(today);
 }
 
 /**
@@ -124,18 +197,25 @@ async function checkForStall(): Promise<void> {
 
 const handle = createHandler({
   store,
-  device,
   source,
-  sound,
   priv,
-  cameraId,
+  protect,
+  // Built per request from the device the caller names, rather than one
+  // pair captured at boot - doorbells can be added and removed while this
+  // is running.
+  imageDeviceFor,
+  soundDeviceFor,
   mediaDir: process.env.DOORMAN_MEDIA ?? "media",
   // Beside the database rather than in the media library: these are
   // derived files, and the media directory is the one thing here that
   // cannot be regenerated.
   cacheDir: process.env.DOORMAN_CACHE ?? join(dirname(dbPath), "thumbs"),
   protectVersion,
-  defaultSound: process.env.DOORMAN_DEFAULT_RINGTONE,
+  defaultSound: defaultRingtone,
+  env: {
+    rollHour: process.env.DOORMAN_ROLL_HOUR ? Number(process.env.DOORMAN_ROLL_HOUR) : undefined,
+    defaultRingtone: process.env.DOORMAN_DEFAULT_RINGTONE,
+  },
   // Set when something terminates TLS in front of this - the app itself
   // always speaks plain HTTP, so it cannot work this out for itself, and
   // guessing wrong either breaks login (Secure over HTTP) or sends the

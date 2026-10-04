@@ -60,6 +60,9 @@ export interface Notifier {
 
 export interface ApplyResult {
   outcome: Outcome;
+  /** Which doorbell this result is about. */
+  deviceId?: string;
+  deviceName?: string | null;
   /** Human-readable, and the thing worth logging. Never just the outcome. */
   reason: string;
   themeId: string | null;
@@ -100,6 +103,11 @@ export interface ApplyOptions {
    * sensible ringtone to invent for someone who has not chosen one.
    */
   defaultSound?: string;
+
+  /** Which doorbell is being driven. Keys all per-device state. */
+  deviceId?: string;
+  /** Its human name, for log lines and the audit trail. */
+  deviceName?: string;
 }
 
 /**
@@ -140,13 +148,21 @@ export async function apply(
   notifier?: Notifier,
   sound?: SoundDevice,
 ): Promise<ApplyResult> {
+  // Which doorbell this is. Every piece of per-run state - the rotation
+  // cursor, what was last set, the audit row - is keyed by it, so two
+  // doorbells never read each other's position or report each other's
+  // history.
+  const deviceId = options.deviceId ?? "default";
+  const deviceName = options.deviceName ?? null;
   const { dryRun = false, skipUnchanged = true, defaultSound } = options;
   const at = now.toISOString();
 
   const finish = async (result: ApplyResult): Promise<ApplyResult> => {
+    result = { ...result, deviceId, deviceName };
     if (!dryRun) {
       store.recordApply({
         at,
+        deviceId,
         themeId: result.themeId,
         assetName: result.assetName,
         reason: result.reason,
@@ -160,8 +176,13 @@ export async function apply(
     return result;
   };
 
-  const config: Config = { themes: store.themes(), selection: store.selection() };
-  const decision = decide(config, now, store.cursor());
+  // Scoped to this doorbell. A theme listing no devices applies to all of
+  // them, so a single-doorbell setup sees exactly what it always did.
+  const config: Config = {
+    themes: options.deviceId ? store.themesFor(options.deviceId) : store.themes(),
+    selection: store.selection(),
+  };
+  const decision = decide(config, now, store.cursor(deviceId), deviceId);
 
   if (!decision.theme) {
     return finish({
@@ -203,7 +224,7 @@ export async function apply(
     // Read the device before writing. This is what turns "the UI disagrees
     // with the doorbell" from a mystery into a fact, and it is cheap.
     const showing = await device.currentImage();
-    const expected = store.lastAppliedAsset();
+    const expected = store.lastAppliedAsset(deviceId);
     const drift =
       expected !== null && showing !== expected
         ? { expected, found: showing }
@@ -214,7 +235,7 @@ export async function apply(
     const wantedSound = theme.sound ?? defaultSound;
 
     if (skipUnchanged && showing === assetName) {
-      if (!dryRun) store.setCursor(decision.cursor);
+      if (!dryRun) store.setCursor(deviceId, decision.cursor);
 
       // The sound still has to be reconciled here. The image being right is
       // no evidence the ringtone is: the two halves are set through different
@@ -250,8 +271,8 @@ export async function apply(
     }
 
     await device.showImage(assetName);
-    store.setLastAppliedAsset(assetName);
-    store.setCursor(decision.cursor);
+    store.setLastAppliedAsset(deviceId, assetName);
+    store.setCursor(deviceId, decision.cursor);
 
     const soundOutcome = await setSound(sound, wantedSound);
 

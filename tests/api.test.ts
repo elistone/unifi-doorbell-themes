@@ -61,14 +61,19 @@ beforeEach(() => {
   source = new FakeSource();
   source.add("hash-xmas", "elf.gif");
   source.add("hash-everyday", "stitch.gif");
+  // Two doorbells, because every interesting case here is about scoping.
+  store.upsertDevice({ id: "front", name: "Front door", enabled: true, position: 0 });
+  store.upsertDevice({ id: "back", name: "Back door", enabled: true, position: 1 });
   api = createApi({
     store,
-    device: new FakeDevice(),
     source,
-    cameraId: "cam-1",
+    imageDeviceFor: () => new FakeDevice(),
+    soundDeviceFor: () => undefined,
+    protect: { displayCapableCameras: async () => [] } as never,
     mediaDir: "media",
+    cacheDir: "/tmp/doorman-test-thumbs",
     protectVersion: "7.2.105",
-  });
+  } as never);
 });
 
 describe("themes", () => {
@@ -107,7 +112,7 @@ describe("themes", () => {
   it("reports a theme whose image has left the library", async () => {
     store.upsertTheme({
       id: "ghost", name: "Ghost", image: "hash-gone",
-      priority: 0, enabled: true, rules: [{}],
+      priority: 0, enabled: true, rules: [{}], devices: [],
     });
     const themes = (await api.routes["GET /api/themes"](
       undefined as never,
@@ -119,7 +124,7 @@ describe("themes", () => {
   it("deletes by id", async () => {
     store.upsertTheme({
       id: "x", name: "X", image: "hash-xmas",
-      priority: 0, enabled: true, rules: [{}],
+      priority: 0, enabled: true, rules: [{}], devices: [],
     });
     await api.routes["DELETE /api/themes"](undefined as never, url("/api/themes?id=x"));
     assert.equal(store.themes().length, 0);
@@ -130,17 +135,17 @@ describe("calendar", () => {
   it("previews the real decision for each day, not an approximation", async () => {
     store.upsertTheme({
       id: "xmas", name: "Christmas", image: "hash-xmas", priority: 10,
-      enabled: true, rules: [{ dateWindow: { from: "12-01", to: "12-26" } }],
+      enabled: true, rules: [{ dateWindow: { from: "12-01", to: "12-26" } }], devices: [],
     });
     store.upsertTheme({
       id: "everyday", name: "Everyday", image: "hash-everyday", priority: 0,
-      enabled: true, rules: [{}],
+      enabled: true, rules: [{}], devices: [],
     });
 
-    const days = (await api.routes["GET /api/calendar"](
+    const { days } = (await api.routes["GET /api/calendar"](
       undefined as never,
       url("/api/calendar?from=2026-11-29&days=5"),
-    )) as Array<{ date: string; themeId: string | null }>;
+    )) as { days: Array<{ date: string; themeId: string | null }> };
 
     assert.deepEqual(
       days.map((d) => [d.date, d.themeId]),
@@ -158,12 +163,12 @@ describe("calendar", () => {
   it("resolves the image filename so the UI can show a thumbnail", async () => {
     store.upsertTheme({
       id: "e", name: "E", image: "hash-everyday",
-      priority: 0, enabled: true, rules: [{}],
+      priority: 0, enabled: true, rules: [{}], devices: [],
     });
-    const days = (await api.routes["GET /api/calendar"](
+    const { days } = (await api.routes["GET /api/calendar"](
       undefined as never,
       url("/api/calendar?from=2026-06-01&days=1"),
-    )) as Array<{ filename: string | null }>;
+    )) as { days: Array<{ filename: string | null }> };
     assert.equal(days[0].filename, "stitch.gif");
   });
 

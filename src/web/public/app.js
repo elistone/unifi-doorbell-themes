@@ -175,7 +175,7 @@ let sounds = { ringtones: [], limit: 12 };
 
 // ------------------------------------------------------------------- tabs
 
-const TABS = ["now", "themes", "media", "sounds", "calendar", "history"];
+const TABS = ["now", "themes", "media", "sounds", "calendar", "history", "settings"];
 
 function show(tab) {
   if (!TABS.includes(tab)) return;
@@ -210,6 +210,7 @@ const TAB_CONTENT = {
   calendar: "#calendar",
   history: "#history",
   now: "#now-panel",
+  settings: "#devices-list",
 };
 
 // [data-tab] rather than every button in the nav: the account button lives
@@ -221,54 +222,91 @@ $$("nav button[data-tab]").forEach((b) => b.addEventListener("click", () => show
 
 async function renderNow() {
   const fresh = ticket("now");
-  $("#now-panel").innerHTML = `
+  $("#now-panel").innerHTML = `<div class="card now">
     <div class="sk" style="aspect-ratio:1;border-radius:var(--radius)"></div>
-    <div>${skLines(6)}</div>`;
+    <div>${skLines(5)}</div></div>`;
 
   state = await api("/api/state");
   if (!fresh()) return;
+
   $("#version").textContent = `v${state.version}`;
   if (state.username) $("#who").textContent = state.username;
 
-  const { showing, ringtone, today, last } = state;
-  const image = showing.filename
-    ? `<img src="/media/${encodeURIComponent(showing.filename)}" alt="">`
-    : `<div class="empty">${showing.assetName ? "On the doorbell, but not in this library" : "Nothing set"}</div>`;
-
-  const soundLine = !state.soundEnabled
-    ? `<span class="badge mute">no admin credentials</span>`
-    : ringtone.dangling
-      ? `<span class="badge bad">points at a ring sound that no longer exists</span>`
-      : esc(ringtone.name ?? "—");
-
-  const outcome = last
-    ? `<span class="badge ${last.outcome === "failed" ? "bad" : last.outcome === "no-theme" ? "warn" : "ok"}">${esc(last.outcome)}</span>`
-    : `<span class="badge mute">never run</span>`;
-
-  $("#now-panel").innerHTML = `
-    <div class="frame">${image}</div>
-    <div>
-      <dl class="kv">
-        <dt>Image</dt><dd>${esc(showing.filename ?? showing.assetName ?? "nothing")}</dd>
-        <dt>Sound</dt><dd>${soundLine}</dd>
-        <dt>Today's theme</dt><dd>${esc(today.themeName ?? "none eligible")}</dd>
-        <dt>Because</dt><dd class="mono">${esc(today.reason)}</dd>
-        <dt>Last run</dt><dd>${outcome} <span style="color:var(--text-dim);font-weight:400">${last ? esc(new Date(last.at).toLocaleString()) : ""}</span></dd>
-        <dt>Protect</dt><dd class="mono">${esc(state.protectVersion)} · camera ${esc(state.cameraId)}</dd>
-      </dl>
-    </div>`;
+  if (state.doorbells.length === 0) {
+    $("#now-panel").innerHTML = emptyState(
+      "No doorbell configured",
+      "Add one in Settings and Doorman will start scheduling it.",
+    );
+  } else {
+    $("#now-panel").innerHTML = state.doorbells.map(doorbellCard).join("");
+  }
 
   $("#counts").innerHTML = `
+    <dt>Doorbells</dt><dd>${state.counts.devices}</dd>
     <dt>Themes</dt><dd>${state.counts.themes}</dd>
     <dt>Images</dt><dd>${state.counts.media}</dd>
     <dt>Ring sounds</dt><dd>${state.counts.ringtones} of ${state.counts.ringtoneLimit}</dd>`;
 
-  $("#selection").value = (await api("/api/selection")).selection;
+  // Per-doorbell apply, wired after render.
+  $$("[data-apply-device]").forEach((b) =>
+    b.addEventListener("click", (e) =>
+      withBusy(e.target, async () => {
+        const { results } = await api(
+          `/api/apply?device=${encodeURIComponent(b.dataset.applyDevice)}`,
+          { method: "POST" },
+        );
+        reportApplies(results);
+        await renderNow();
+      }),
+    ),
+  );
+}
 
-  if (state.counts.themes === 0) {
-    $("#themes-list").innerHTML = emptyState(
-      "No themes yet",
-      "Without one the scheduler leaves the doorbell alone. Create a theme to pair an image with a sound and a date window.",
+/** One doorbell: what it is showing, what it will show, and why. */
+function doorbellCard(d) {
+  const image = d.showing.filename
+    ? `<img src="/media/${encodeURIComponent(d.showing.filename)}" alt="">`
+    : `<div class="empty">${d.showing.assetName ? "Showing something not in this library" : "Nothing set"}</div>`;
+
+  const sound = !state.soundEnabled
+    ? `<span class="badge mute">no admin credentials</span>`
+    : d.ringtone.dangling
+      ? `<span class="badge bad">points at a ring sound that no longer exists</span>`
+      : esc(d.ringtone.name ?? "—");
+
+  const last = d.last;
+  const outcome = last
+    ? `<span class="badge ${last.outcome === "failed" ? "bad" : last.outcome === "no-theme" ? "warn" : "ok"}">${esc(last.outcome)}</span>`
+    : `<span class="badge mute">never run</span>`;
+
+  return `
+    <div class="card now" style="margin-bottom:14px">
+      <div class="frame">${image}</div>
+      <div>
+        <div class="row" style="margin-bottom:10px">
+          <strong style="font-size:16px">${esc(d.name)}</strong>
+          ${d.enabled ? "" : `<span class="badge mute">disabled</span>`}
+          <div class="spacer"></div>
+          <button class="btn small" data-apply-device="${esc(d.id)}">Apply now</button>
+        </div>
+        <dl class="kv">
+          <dt>Image</dt><dd>${esc(d.showing.filename ?? d.showing.assetName ?? "nothing")}</dd>
+          <dt>Sound</dt><dd>${sound}</dd>
+          <dt>Today</dt><dd>${esc(d.today.themeName ?? "none eligible")}</dd>
+          <dt>Because</dt><dd class="mono">${esc(d.today.reason)}</dd>
+          <dt>Last run</dt><dd>${outcome} <span style="color:var(--text-dim);font-weight:400">${last ? esc(new Date(last.at).toLocaleString()) : ""}</span></dd>
+          <dt>Themes</dt><dd>${d.themeCount} eligible to this doorbell</dd>
+        </dl>
+      </div>
+    </div>`;
+}
+
+/** Summarise an apply that may have covered several doorbells. */
+function reportApplies(results) {
+  for (const r of results) {
+    toast(
+      `${r.deviceName ? `${r.deviceName}: ` : ""}${r.outcome} — ${r.reason}`,
+      r.outcome === "failed" ? "bad" : "ok",
     );
   }
 }
@@ -299,31 +337,215 @@ document.addEventListener(
 
 $("#apply-now").addEventListener("click", (e) =>
   withBusy(e.target, async () => {
-    const result = await api("/api/apply", { method: "POST" });
-    toast(`${result.outcome}: ${result.reason}`, result.outcome === "failed" ? "bad" : "ok");
+    const { results } = await api("/api/apply", { method: "POST" });
+    reportApplies(results);
     await renderNow();
   }),
 );
 
 $("#dry-run").addEventListener("click", (e) =>
   withBusy(e.target, async () => {
-    const result = await api("/api/apply?dryRun=true", { method: "POST" });
-    toast(`${result.outcome}: ${result.reason}`);
+    const { results } = await api("/api/apply?dryRun=true", { method: "POST" });
+    for (const r of results) {
+      toast(`${r.deviceName ? `${r.deviceName}: ` : ""}${r.outcome} — ${r.reason}`);
+    }
   }),
 );
 
-$("#selection").addEventListener("change", async (e) => {
+// ---------------------------------------------------------------- settings
+
+let devices = [];
+
+async function saveSetting(patch, note) {
   try {
-    await api("/api/selection", {
+    await api("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ selection: e.target.value }),
+      body: JSON.stringify(patch),
     });
-    toast(`Selection is now ${e.target.value}.`, "ok");
+    toast(note, "ok");
   } catch (error) {
     toast(error.message, "bad");
+    await renderSettings();
   }
-});
+}
+
+async function renderSettings() {
+  const fresh = ticket("settings");
+  $("#devices-list").innerHTML = skeletonRows(2);
+
+  const [list, settings] = await Promise.all([api("/api/devices"), api("/api/settings")]);
+  await loadSounds();
+  if (!fresh()) return;
+  devices = list;
+  const themeList = await api("/api/themes");
+
+  $("#devices-list").innerHTML =
+    devices.length === 0
+      ? emptyState("No doorbells yet", "Add one and Doorman will start scheduling it.")
+      : devices
+          .map((d) => {
+            const scoped = themeList.filter((t) => t.devices.includes(d.id)).length;
+            const all = themeList.filter((t) => t.devices.length === 0).length;
+            return `
+            <div class="theme ${d.enabled ? "" : "off"}">
+              <div class="noimg" style="font-size:20px">🔔</div>
+              <div>
+                <div class="name">
+                  ${esc(d.name)}
+                  ${d.enabled ? "" : `<span class="badge mute">disabled</span>`}
+                </div>
+                <div class="meta mono">${esc(d.id)}</div>
+                <div class="meta">${all + scoped} themes apply here${scoped > 0 ? ` (${scoped} only here)` : ""}</div>
+              </div>
+              <div class="row">
+                <button class="btn small" data-rename="${esc(d.id)}">Rename</button>
+                <button class="btn small" data-toggle-device="${esc(d.id)}">${d.enabled ? "Disable" : "Enable"}</button>
+                <button class="btn small danger" data-remove-device="${esc(d.id)}">Remove</button>
+              </div>
+            </div>`;
+          })
+          .join("");
+
+  $("#selection").value = settings.selection;
+
+  $("#roll-hour").innerHTML = Array.from({ length: 24 }, (_, h) => {
+    const label = `${String(h).padStart(2, "0")}:00`;
+    return `<option value="${h}" ${h === settings.rollHour.value ? "selected" : ""}>${label}</option>`;
+  }).join("");
+
+  $("#default-ringtone").innerHTML =
+    `<option value="">None — leave whatever is set</option>` +
+    sounds.ringtones
+      .map(
+        (r) =>
+          `<option value="${esc(r.id)}" ${r.id === settings.defaultRingtone.value ? "selected" : ""}>${esc(r.name)}</option>`,
+      )
+      .join("");
+
+  // Worth saying out loud: a value coming from the environment is one the
+  // deployment chose, and editing it here takes it over for good.
+  const fromEnv = [
+    settings.rollHour.source === "environment" ? "the change hour" : null,
+    settings.defaultRingtone.source === "environment" ? "the default ring sound" : null,
+  ].filter(Boolean);
+  $("#settings-source").textContent = fromEnv.length
+    ? `${fromEnv.join(" and ")} ${fromEnv.length === 1 ? "is" : "are"} currently coming from the deployment's configuration. Changing ${fromEnv.length === 1 ? "it" : "them"} here overrides that.`
+    : "";
+
+  wireDeviceButtons();
+}
+
+function wireDeviceButtons() {
+  $$("[data-rename]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const device = devices.find((d) => d.id === b.dataset.rename);
+      const name = prompt(`What should this doorbell be called?`, device.name);
+      if (name === null || name.trim() === device.name) return;
+      try {
+        await api("/api/devices", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...device, name: name.trim() }),
+        });
+        await renderSettings();
+      } catch (error) {
+        toast(error.message, "bad");
+      }
+    }),
+  );
+
+  $$("[data-toggle-device]").forEach((b) =>
+    b.addEventListener("click", (e) =>
+      withBusy(e.target, async () => {
+        const device = devices.find((d) => d.id === b.dataset.toggleDevice);
+        await api("/api/devices", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...device, enabled: !device.enabled }),
+        });
+        // A disabled doorbell keeps its themes and history; it is just
+        // skipped by the scheduler.
+        toast(`${device.name} ${device.enabled ? "disabled" : "enabled"}.`, "ok");
+        await renderSettings();
+      }),
+    ),
+  );
+
+  $$("[data-remove-device]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const device = devices.find((d) => d.id === b.dataset.removeDevice);
+      if (
+        !confirm(
+          `Remove "${device.name}"?\n\nIts themes and history are kept. Any theme that applies ONLY to this doorbell will be disabled rather than spread to the others.`,
+        )
+      ) {
+        return;
+      }
+      try {
+        const result = await api(`/api/devices?id=${encodeURIComponent(device.id)}`, {
+          method: "DELETE",
+        });
+        toast(
+          result.themesDisabled > 0
+            ? `Removed. ${result.themesDisabled} theme${result.themesDisabled === 1 ? " was" : "s were"} disabled.`
+            : "Removed.",
+          "ok",
+        );
+        await renderSettings();
+      } catch (error) {
+        toast(error.message, "bad");
+      }
+    }),
+  );
+}
+
+$("#add-doorbell").addEventListener("click", (e) =>
+  withBusy(e.target, async () => {
+    const found = await api("/api/devices/discover");
+    if (found.length === 0) {
+      toast("No other camera on the controller can display a welcome image.", "bad");
+      return;
+    }
+    // A prompt rather than a dialog: this is a once-or-twice-ever action,
+    // and the list is short because it excludes doorbells already added.
+    const choice = prompt(
+      `Cameras that can show a welcome image:\n\n${found
+        .map((c, i) => `${i + 1}. ${c.name} (${c.type})`)
+        .join("\n")}\n\nWhich number?`,
+      "1",
+    );
+    if (choice === null) return;
+    const picked = found[Number(choice) - 1];
+    if (!picked) {
+      toast("No camera with that number.", "bad");
+      return;
+    }
+    const name = prompt("What should it be called?", picked.name);
+    if (name === null || !name.trim()) return;
+
+    await api("/api/devices", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: picked.id, name: name.trim(), enabled: true }),
+    });
+    toast(`Added ${name.trim()}.`, "ok");
+    await renderSettings();
+  }),
+);
+
+$("#selection").addEventListener("change", (e) =>
+  saveSetting({ selection: e.target.value }, `Selection is now ${e.target.value}.`),
+);
+$("#roll-hour").addEventListener("change", (e) =>
+  saveSetting(
+    { rollHour: Number(e.target.value) },
+    `Themes will change at ${String(e.target.value).padStart(2, "0")}:00.`,
+  ),
+);
+$("#default-ringtone").addEventListener("change", (e) =>
+  saveSetting({ defaultRingtone: e.target.value }, "Default ring sound saved."),
+);
 
 // --------------------------------------------------------------- dark mode
 
@@ -357,7 +579,11 @@ async function renderThemes() {
   const fresh = ticket("themes");
   $("#themes-list").innerHTML = skeletonRows(4);
 
-  [themes, media] = await Promise.all([api("/api/themes"), api("/api/media")]);
+  [themes, media, devices] = await Promise.all([
+    api("/api/themes"),
+    api("/api/media"),
+    api("/api/devices"),
+  ]);
   await loadSounds();
   if (!fresh()) return;
 
@@ -393,6 +619,19 @@ async function renderThemes() {
           <div class="meta">
             ${esc(theme.rules.map(describeRule).join("  or  "))}
             · ${sound ? esc(sound.name) : theme.sound ? `<span style="color:var(--bad)">sound missing</span>` : "default sound"}
+            ${
+              devices.length > 1
+                ? ` · ${
+                    theme.devices.length === 0
+                      ? "all doorbells"
+                      : esc(
+                          theme.devices
+                            .map((id) => devices.find((d) => d.id === id)?.name ?? id)
+                            .join(", "),
+                        )
+                  }`
+                : ""
+            }
           </div>
         </div>
         <button class="btn small" data-edit="${esc(theme.id)}">Edit</button>
@@ -480,6 +719,16 @@ function openTheme(theme) {
       .map((r) => `<option value="${esc(r.id)}" ${r.id === theme?.sound ? "selected" : ""}>${esc(r.name)}</option>`)
       .join("");
 
+  // Only worth showing with more than one doorbell; with one it is noise
+  // and the empty default already means "that one".
+  $("#f-devices-field").hidden = devices.length < 2;
+  $("#f-devices").innerHTML = devices
+    .map(
+      (d) => `<label><input type="checkbox" class="f-device" value="${esc(d.id)}"
+        ${theme?.devices?.includes(d.id) ? "checked" : ""}>${esc(d.name)}</label>`,
+    )
+    .join("");
+
   $("#f-rules").innerHTML = (theme?.rules?.length ? theme.rules : [{}]).map(ruleRow).join("");
   wireRuleButtons();
   $("#theme-dialog").showModal();
@@ -526,6 +775,9 @@ $("#theme-form").addEventListener("submit", async (event) => {
     id: $("#f-id").value.trim(),
     name: $("#f-name").value.trim(),
     filename: $("#f-image").value,
+    // Empty means every doorbell, which is what the label says and what
+    // the server treats it as.
+    devices: [...document.querySelectorAll(".f-device:checked")].map((c) => c.value),
     sound: $("#f-sound").value || undefined,
     priority: Number($("#f-priority").value),
     enabled: $("#f-enabled").checked,
@@ -748,12 +1000,30 @@ const columnOf = (date) => (date.getDay() - WEEK_START + 7) % 7;
 
 async function renderCalendar() {
   const fresh = ticket("calendar");
+
+  // Each doorbell has its own rotation, so the calendar has to be about
+  // one of them. The picker only appears when there is a choice to make.
+  if (devices.length === 0) devices = await api("/api/devices");
+  const field = $("#cal-device-field");
+  field.hidden = devices.length < 2;
+  if ($("#cal-device").options.length !== devices.length) {
+    const current = $("#cal-device").value;
+    $("#cal-device").innerHTML = devices
+      .map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`)
+      .join("");
+    if (current) $("#cal-device").value = current;
+  }
+
   const from = $("#cal-from").value;
   const days = $("#cal-days").value;
   $("#calendar").innerHTML = skeletonDays(Math.min(Number(days), 63));
 
-  const data = await api(`/api/calendar?days=${days}${from ? `&from=${from}` : ""}`);
+  const picked = $("#cal-device").value;
+  const response = await api(
+    `/api/calendar?days=${days}${from ? `&from=${from}` : ""}${picked ? `&device=${encodeURIComponent(picked)}` : ""}`,
+  );
   if (!fresh()) return;
+  const data = response.days;
 
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -821,6 +1091,7 @@ async function renderCalendar() {
 
 $("#cal-from").addEventListener("change", renderCalendar);
 $("#cal-days").addEventListener("change", renderCalendar);
+$("#cal-device").addEventListener("change", renderCalendar);
 
 // ----------------------------------------------------------------- history
 
@@ -835,13 +1106,14 @@ async function renderHistory() {
     return;
   }
   $("#history").innerHTML = `
-    <thead><tr><th>When</th><th>Outcome</th><th>Theme</th><th>Why</th></tr></thead>
+    <thead><tr><th>When</th><th>Doorbell</th><th>Outcome</th><th>Theme</th><th>Why</th></tr></thead>
     <tbody>
       ${rows
         .map(
           (r) => `
         <tr>
           <td style="white-space:nowrap">${esc(new Date(r.at).toLocaleString())}</td>
+          <td>${esc(r.deviceName ?? "—")}</td>
           <td><span class="badge ${r.outcome === "failed" ? "bad" : r.outcome === "no-theme" ? "warn" : r.outcome === "unchanged" ? "mute" : "ok"}">${esc(r.outcome)}</span></td>
           <td>${esc(r.themeId ?? "—")}</td>
           <td style="color:var(--text-dim)">${esc(r.reason)}</td>
@@ -968,6 +1240,7 @@ const RENDERERS = {
   sounds: renderSounds,
   calendar: renderCalendar,
   history: renderHistory,
+  settings: renderSettings,
 };
 
 /** Everything that needs a session. Called once the gate is passed. */

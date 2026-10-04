@@ -16,13 +16,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { apply, hashBytes, reconcile } from "../apply.ts";
 import type { AssetSource, ImageDevice, SoundDevice } from "../apply.ts";
 import { decide } from "../domain/decide.ts";
-import type { Rule, Theme } from "../domain/types.ts";
+import type { Device, Rule, Theme } from "../domain/types.ts";
 import { analyseGif } from "../media/analyse.ts";
 import type { GifAnalysis } from "../media/analyse.ts";
 import { fitToLimit } from "../media/transform.ts";
 import { Thumbnailer } from "../media/thumbnail.ts";
 import { MAX_RINGTONES } from "../device/private.ts";
 import type { PrivateApi } from "../device/private.ts";
+import type { Protect } from "../device/protect.ts";
 import { Store } from "../store/db.ts";
 import { VERSION } from "../version.ts";
 import {
@@ -39,21 +40,29 @@ import {
 
 export interface ApiDeps {
   store: Store;
-  device: ImageDevice;
   source: AssetSource;
-  sound?: SoundDevice;
+  /** Built per request, because doorbells come and go while this runs. */
+  imageDeviceFor: (deviceId: string) => ImageDevice;
+  soundDeviceFor: (deviceId: string) => SoundDevice | undefined;
+  /** For discovering cameras that can show an image. */
+  protect: Protect;
   /** Only present when admin credentials were supplied. */
   priv?: PrivateApi;
   /** Who is calling, resolved by the router from the session cookie. */
   callerOf: (req: IncomingMessage) => string | null;
   /** The caller's session digest, so logout can revoke exactly that one. */
   sessionDigestOf: (req: IncomingMessage) => string | null;
-  cameraId: string;
   mediaDir: string;
   /** Where poster frames are cached. Regenerable, so losing it costs a decode. */
   cacheDir: string;
   protectVersion: string;
-  defaultSound?: string;
+  /** Read per call, so a change in Settings applies without a restart. */
+  defaultSound?: () => string | undefined;
+  /**
+   * What the deployment configured, for Settings to show as the fallback
+   * behind any stored value.
+   */
+  env?: { rollHour?: number; defaultRingtone?: string };
   /** Injected so the daemon's own roll bookkeeping stays in one place. */
   onApplied?: (date: string) => void;
 }
@@ -177,8 +186,26 @@ function safeName(name: string): string {
 }
 
 export function createApi(deps: ApiDeps) {
-  const { store, device, source, sound, priv, cameraId, mediaDir } = deps;
+  const { store, source, priv, mediaDir } = deps;
   const thumbnails = new Thumbnailer(deps.cacheDir);
+
+  /**
+   * Resolve a `?device=` parameter to a configured doorbell.
+   *
+   * Defaults to the first one, so every single-doorbell call can leave it
+   * off entirely and nothing in the UI has to care until there are two.
+   */
+  function resolveDevice(url: URL): Device {
+    const devices = store.devices();
+    if (devices.length === 0) {
+      throw new HttpError(409, "No doorbell is configured yet. Add one in Settings.");
+    }
+    const asked = url.searchParams.get("device");
+    if (!asked) return devices[0];
+    const found = devices.find((d) => d.id === asked);
+    if (!found) throw new HttpError(404, `No doorbell with id ${asked}.`);
+    return found;
+  }
 
   /**
    * Issue a session and hand the token back for the router to set as a
@@ -195,6 +222,33 @@ export function createApi(deps: ApiDeps) {
     return source.localFiles();
   }
 
+  /**
+   * Where each value came from, in three states rather than two.
+   *
+   * "environment" means whoever deployed this chose it and editing here
+   * overrides them; "default" means nobody chose anything. Collapsing
+   * those two made the UI claim a deployment had configured a value it had
+   * never heard of.
+   */
+  function settingsPayload() {
+    const sourceOf = (stored: string | null, fromEnv: unknown) =>
+      stored !== null ? "setting" : fromEnv !== undefined && fromEnv !== null ? "environment" : "default";
+
+    const storedHour = store.setting("rollHour");
+    const storedRingtone = store.setting("defaultRingtone");
+    return {
+      selection: store.selection(),
+      rollHour: {
+        value: Number(storedHour ?? deps.env?.rollHour ?? 4),
+        source: sourceOf(storedHour, deps.env?.rollHour),
+      },
+      defaultRingtone: {
+        value: storedRingtone ?? deps.env?.defaultRingtone ?? null,
+        source: sourceOf(storedRingtone, deps.env?.defaultRingtone),
+      },
+    };
+  }
+
   async function themesWithMedia(): Promise<Array<Theme & { filename: string | null; missing: boolean }>> {
     const files = await mediaIndex();
     return store.themes().map((theme) => {
@@ -205,43 +259,68 @@ export function createApi(deps: ApiDeps) {
 
   const routes: Record<string, (req: IncomingMessage, url: URL) => Promise<unknown>> = {
     /** Everything the dashboard needs for its first paint, in one request. */
+    /**
+     * Everything the dashboard needs for its first paint, in one request -
+     * now one entry per doorbell. Device calls run in parallel because
+     * they are reads; the writes in a roll are deliberately sequential.
+     */
     "GET /api/state": async (req) => {
-      const [showing, currentRingtone, ringtones] = await Promise.all([
-        device.currentImage().catch(() => null),
-        sound?.currentRingtone().catch(() => null) ?? Promise.resolve(null),
-        priv?.ringtones().catch(() => []) ?? Promise.resolve([]),
-      ]);
+      const devices = store.devices();
       const files = await mediaIndex();
       const byAsset = new Map(store.assets().map((a) => [a.assetName, a]));
-      const showingAsset = showing ? byAsset.get(showing) : undefined;
-      const showingFile = showingAsset ? files.get(showingAsset.hash) ?? null : null;
-
+      const ringtones = await (priv?.ringtones().catch(() => []) ?? Promise.resolve([]));
       const now = new Date();
-      const decision = decide(
-        { themes: store.themes(), selection: store.selection() },
-        now,
-        store.cursor(),
+
+      const doorbells = await Promise.all(
+        devices.map(async (d) => {
+          const sound = deps.soundDeviceFor(d.id);
+          const [showing, currentRingtone] = await Promise.all([
+            deps.imageDeviceFor(d.id).currentImage().catch(() => null),
+            sound?.currentRingtone().catch(() => null) ?? Promise.resolve(null),
+          ]);
+          const showingAsset = showing ? byAsset.get(showing) : undefined;
+
+          const decision = decide(
+            { themes: store.themesFor(d.id), selection: store.selection() },
+            now,
+            store.cursor(d.id),
+            d.id,
+          );
+
+          return {
+            id: d.id,
+            name: d.name,
+            enabled: d.enabled,
+            showing: {
+              assetName: showing,
+              filename: showingAsset ? files.get(showingAsset.hash) ?? null : null,
+            },
+            ringtone: {
+              id: currentRingtone,
+              name: ringtones.find((r) => r.id === currentRingtone)?.name ?? null,
+              // A ringtoneId pointing at nothing means Protect plays its
+              // own fallback, which looks like the app doing nothing.
+              dangling: Boolean(currentRingtone) && !ringtones.some((r) => r.id === currentRingtone),
+            },
+            today: {
+              themeId: decision.theme?.id ?? null,
+              themeName: decision.theme?.name ?? null,
+              reason: decision.reason,
+            },
+            themeCount: store.themesFor(d.id).length,
+            last: store.recentApplies(1, d.id)[0] ?? null,
+          };
+        }),
       );
 
       return {
         version: VERSION,
         username: deps.callerOf(req),
         protectVersion: deps.protectVersion,
-        cameraId,
-        soundEnabled: Boolean(sound),
-        showing: { assetName: showing, filename: showingFile },
-        ringtone: {
-          id: currentRingtone,
-          name: ringtones.find((r) => r.id === currentRingtone)?.name ?? null,
-          /** A ringtoneId pointing at nothing means Protect plays its fallback. */
-          dangling: Boolean(currentRingtone) && !ringtones.some((r) => r.id === currentRingtone),
-        },
-        today: {
-          themeId: decision.theme?.id ?? null,
-          themeName: decision.theme?.name ?? null,
-          reason: decision.reason,
-        },
+        soundEnabled: Boolean(priv),
+        doorbells,
         counts: {
+          devices: devices.length,
           themes: store.themes().length,
           media: files.size,
           ringtones: ringtones.length,
@@ -249,6 +328,71 @@ export function createApi(deps: ApiDeps) {
         },
         last: store.recentApplies(1)[0] ?? null,
       };
+    },
+
+    // ------------------------------------------------------------ devices
+
+    "GET /api/devices": async () => store.devices(),
+
+    /**
+     * Cameras on the controller that could be added.
+     *
+     * Filtered to ones that can actually display an image, and to ones not
+     * already configured - a list that offers you a doorbell you already
+     * have is a list you have to read carefully.
+     */
+    "GET /api/devices/discover": async () => {
+      const known = new Set(store.devices().map((d) => d.id));
+      const cameras = await deps.protect.displayCapableCameras();
+      return cameras
+        .filter((c) => !known.has(c.id))
+        .map((c) => ({ id: c.id, name: c.name, type: c.type, state: c.state }));
+    },
+
+    "PUT /api/devices": async (req) => {
+      const body = await readJson<Partial<Device>>(req);
+      if (!body.id) throw new HttpError(400, "A doorbell needs an id.");
+
+      const name = (body.name ?? "").trim();
+      if (!name) throw new HttpError(400, "Give the doorbell a name.");
+      if (name.length > 60) throw new HttpError(400, "That name is longer than 60 characters.");
+
+      const existing = store.device(body.id);
+      // Adding, rather than renaming: check the controller actually has it,
+      // so a typo becomes an error now instead of a doorbell that silently
+      // never updates.
+      if (!existing) {
+        const cameras = await deps.protect.displayCapableCameras().catch(() => []);
+        if (cameras.length > 0 && !cameras.some((c) => c.id === body.id)) {
+          throw new HttpError(
+            400,
+            `Protect has no image-capable camera with id ${body.id}.`,
+          );
+        }
+      }
+
+      const device: Device = {
+        id: body.id,
+        name,
+        enabled: body.enabled !== false,
+        position: Number(body.position ?? existing?.position ?? store.devices().length),
+      };
+      store.upsertDevice(device);
+      return device;
+    },
+
+    "DELETE /api/devices": async (_req, url) => {
+      const id = url.searchParams.get("id");
+      if (!id) throw new HttpError(400, "Which doorbell?");
+      if (!store.device(id)) throw new HttpError(404, `No doorbell with id ${id}.`);
+
+      // Themes scoped only to this one are disabled rather than silently
+      // promoted to every other doorbell - see Store.deleteDevice.
+      const orphaned = store.themes().filter(
+        (t) => t.devices.length === 1 && t.devices[0] === id,
+      ).length;
+      store.deleteDevice(id);
+      return { removed: id, themesDisabled: orphaned };
     },
 
     "GET /api/themes": async () => themesWithMedia(),
@@ -269,6 +413,14 @@ export function createApi(deps: ApiDeps) {
       }
       if (!image) throw new HttpError(400, "A theme needs an image.");
 
+      // Unknown ids are dropped rather than rejected: a theme referring to
+      // a doorbell that has since been removed should be fixable by saving
+      // it, not blocked by the thing you are trying to fix.
+      const known = new Set(store.devices().map((d) => d.id));
+      const devices = Array.isArray(body.devices)
+        ? [...new Set(body.devices.filter((id) => known.has(id)))]
+        : (store.themes().find((t) => t.id === body.id)?.devices ?? []);
+
       const theme: Theme = {
         id: safeName(body.id),
         name: body.name?.trim() || body.id,
@@ -277,6 +429,7 @@ export function createApi(deps: ApiDeps) {
         priority: Number(body.priority ?? 0),
         enabled: body.enabled !== false,
         rules: Array.isArray(body.rules) && body.rules.length > 0 ? (body.rules as Rule[]) : [{}],
+        devices,
       };
       store.upsertTheme(theme);
       return theme;
@@ -428,7 +581,14 @@ export function createApi(deps: ApiDeps) {
       return { status: "ok", version: VERSION, last: last ?? null };
     },
 
-    "GET /api/applies": async (_req, url) => store.recentApplies(Number(url.searchParams.get("limit") ?? 50)),
+    "GET /api/applies": async (_req, url) => {
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      const asked = url.searchParams.get("device");
+      const names = new Map(store.devices().map((d) => [d.id, d.name]));
+      return store
+        .recentApplies(limit, asked ?? undefined)
+        .map((row) => ({ ...row, deviceName: row.deviceId ? names.get(row.deviceId) ?? null : null }));
+    },
 
     /**
      * What would show on each of the next N days.
@@ -441,14 +601,15 @@ export function createApi(deps: ApiDeps) {
       const days = Math.min(Number(url.searchParams.get("days") ?? 60), 400);
       const start = url.searchParams.get("from") ?? todayLocal();
       const from = parseLocalDate(start);
-      const config = { themes: store.themes(), selection: store.selection() };
+      const target = resolveDevice(url);
+      const config = { themes: store.themesFor(target.id), selection: store.selection() };
       const files = await mediaIndex();
 
-      let cursor = store.cursor();
+      let cursor = store.cursor(target.id);
       const out = [];
       for (let i = 0; i < days; i++) {
         const day = new Date(from.getFullYear(), from.getMonth(), from.getDate() + i, 12);
-        const decision = decide(config, day, cursor);
+        const decision = decide(config, day, cursor, target.id);
         // Carry the cursor forward so sequential selection previews the real
         // sequence rather than the same entry every day.
         cursor = decision.cursor;
@@ -460,30 +621,61 @@ export function createApi(deps: ApiDeps) {
           priority: decision.theme?.priority ?? null,
         });
       }
-      return out;
+      return { device: { id: target.id, name: target.name }, days: out };
     },
 
     /** Run the real thing, now. Same call the scheduler makes. */
+    /**
+     * Run the real thing now - the same call the scheduler makes.
+     *
+     * With no `device` parameter this covers every enabled doorbell, which
+     * is what the button on the dashboard means. Sequential for the same
+     * reason the scheduler is: several uploads at once is how you find the
+     * NVR's request limit.
+     */
     "POST /api/apply": async (_req, url) => {
       const dryRun = url.searchParams.get("dryRun") === "true";
       const now = new Date();
+
+      const asked = url.searchParams.get("device");
+      const targets = asked
+        ? [resolveDevice(url)]
+        : store.devices().filter((d) => d.enabled);
+      if (targets.length === 0) {
+        throw new HttpError(409, "No doorbell is enabled. Add or enable one in Settings.");
+      }
+
       if (!dryRun) {
         const dropped = await reconcile(store, source);
         if (dropped.length > 0) console.log(`forgot ${dropped.join(", ")} - no longer on the NVR`);
       }
-      const result = await apply(
-        store,
-        device,
-        source,
-        now,
-        { dryRun, defaultSound: deps.defaultSound },
-        undefined,
-        sound,
-      );
-      // Record the roll so the daemon does not immediately roll again, and so
-      // a manual apply counts as today's.
-      if (!dryRun && result.outcome !== "failed") deps.onApplied?.(todayLocal(now));
-      return result;
+
+      const results = [];
+      for (const target of targets) {
+        results.push(
+          await apply(
+            store,
+            deps.imageDeviceFor(target.id),
+            source,
+            now,
+            {
+              dryRun,
+              defaultSound: deps.defaultSound?.(),
+              deviceId: target.id,
+              deviceName: target.name,
+            },
+            undefined,
+            deps.soundDeviceFor(target.id),
+          ),
+        );
+      }
+
+      // Today counts as rolled only when nothing failed, matching the
+      // scheduler - a partial failure must stay retryable.
+      if (!dryRun && results.every((r) => r.outcome !== "failed")) {
+        deps.onApplied?.(todayLocal(now));
+      }
+      return { results };
     },
 
     // ------------------------------------------------------------- accounts
@@ -571,6 +763,48 @@ export function createApi(deps: ApiDeps) {
       // Every other session is now someone who knows the old password.
       store.deleteSessionsFor(username);
       return { changed: true, session: await startSession(username) };
+    },
+
+    // ----------------------------------------------------------- settings
+
+    /**
+     * Preferences, with the environment as the fallback.
+     *
+     * `source` tells the UI whether a value is the deployment's default or
+     * something somebody set here, which is the difference between "change
+     * this" and "this is pinned by whoever deployed it".
+     */
+    "GET /api/settings": async () => settingsPayload(),
+
+    "PUT /api/settings": async (req) => {
+      const body = await readJson<Record<string, unknown>>(req);
+
+      if (body.selection !== undefined) {
+        if (body.selection !== "random" && body.selection !== "sequential") {
+          throw new HttpError(400, "Selection is 'random' or 'sequential'.");
+        }
+        store.setSelection(body.selection);
+      }
+
+      if (body.rollHour !== undefined) {
+        const hour = Number(body.rollHour);
+        if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+          throw new HttpError(400, "The roll hour is a whole number from 0 to 23.");
+        }
+        store.setSetting("rollHour", String(hour));
+      }
+
+      if (body.defaultRingtone !== undefined) {
+        // Empty string means "go back to the deployment's default", which
+        // is a different thing from "no sound at all".
+        if (body.defaultRingtone === "" || body.defaultRingtone === null) {
+          store.clearSetting("defaultRingtone");
+        } else {
+          store.setSetting("defaultRingtone", String(body.defaultRingtone));
+        }
+      }
+
+      return settingsPayload();
     },
 
     "GET /api/selection": async () => ({ selection: store.selection() }),

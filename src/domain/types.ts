@@ -38,6 +38,20 @@ export interface Rule {
   timeOfDay?: TimeWindow;
 }
 
+/**
+ * A doorbell.
+ *
+ * The id is Protect's camera id; the name is the user's. Protect calls it
+ * "UVC G4 Doorbell Pro", which is useless when you have two of them - what
+ * you want to read on a theme is "Front door".
+ */
+export interface Device {
+  id: string;
+  name: string;
+  enabled: boolean;
+  position: number;
+}
+
 export interface Theme {
   id: string;
   name: string;
@@ -67,6 +81,16 @@ export interface Theme {
   /** Eligible when ANY rule matches. No rules means never eligible. */
   rules: Rule[];
   enabled: boolean;
+
+  /**
+   * Which doorbells this may apply to.
+   *
+   * **Empty means every doorbell**, not none. That default is the whole
+   * reason adding a second doorbell does not silently unschedule the
+   * first, and it is what lets a theme written when there was only one
+   * device keep working unchanged.
+   */
+  devices: string[];
 }
 
 /**

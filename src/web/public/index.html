@@ -80,6 +80,7 @@
     <button data-tab="sounds">Sounds</button>
     <button data-tab="calendar">Calendar</button>
     <button data-tab="history">History</button>
+    <button data-tab="settings">Settings</button>
     <button id="account" title="Account">👤</button>
   </nav>
 </header>
@@ -90,10 +91,7 @@
     <h2>On the doorbell now</h2>
     <p class="sub">What a visitor sees and hears when they press the button.</p>
 
-    <div class="card now" id="now-panel">
-      <div class="frame"><div class="empty">Loading…</div></div>
-      <div></div>
-    </div>
+    <div id="now-panel"></div>
 
     <div class="row" style="margin-top:16px">
       <button class="btn primary" id="apply-now">Apply now</button>
@@ -102,21 +100,9 @@
       <button class="btn small" id="toggle-theme" title="Switch light/dark">◐</button>
     </div>
 
-    <div class="grid cols-2" style="margin-top:22px">
-      <div class="card">
-        <h3>Selection</h3>
-        <p class="sub" style="margin-bottom:12px">
-          How a day is picked when several themes tie on priority.
-        </p>
-        <select id="selection">
-          <option value="random">Random — a different one each day, stable within the day</option>
-          <option value="sequential">Sequential — straight through the list in order</option>
-        </select>
-      </div>
-      <div class="card" id="counts-card">
-        <h3>Library</h3>
-        <dl class="kv" id="counts"></dl>
-      </div>
+    <div class="card" style="margin-top:22px">
+      <h3>Library</h3>
+      <dl class="kv" id="counts"></dl>
     </div>
   </section>
 
@@ -183,6 +169,10 @@
         <span>From</span>
         <input type="date" id="cal-from">
       </label>
+      <label class="field" style="margin:0" id="cal-device-field" hidden>
+        <span>Doorbell</span>
+        <select id="cal-device"></select>
+      </label>
       <label class="field" style="margin:0">
         <span>Days</span>
         <select id="cal-days">
@@ -194,6 +184,53 @@
       </label>
     </div>
     <div id="calendar"></div>
+  </section>
+
+  <!-- -------------------------------------------------------- Settings -->
+  <section id="tab-settings" hidden>
+    <h2>Settings</h2>
+    <p class="sub">Doorbells, and how themes are chosen for them.</p>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <h3 style="margin:0">Doorbells</h3>
+          <p class="sub" style="margin:4px 0 0">
+            Each one rotates independently. A theme with no doorbells ticked
+            applies to all of them.
+          </p>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn primary" id="add-doorbell">Add doorbell</button>
+      </div>
+      <div id="devices-list" style="margin-top:14px"></div>
+    </div>
+
+    <div class="grid cols-2" style="margin-top:16px">
+      <div class="card">
+        <h3>Selection</h3>
+        <p class="sub" style="margin-bottom:12px">
+          How a day is picked when several themes tie on priority.
+        </p>
+        <select id="selection">
+          <option value="random">Random — a different one each day, stable within the day</option>
+          <option value="sequential">Sequential — straight through the list in order</option>
+        </select>
+      </div>
+
+      <div class="card">
+        <h3>Daily change</h3>
+        <label class="field">
+          <span>Hour to change theme <span class="hint">— local time</span></span>
+          <select id="roll-hour"></select>
+        </label>
+        <label class="field" style="margin-bottom:0">
+          <span>Default ring sound <span class="hint">— used when a theme names none</span></span>
+          <select id="default-ringtone"></select>
+        </label>
+        <p class="sub" style="margin:12px 0 0" id="settings-source"></p>
+      </div>
+    </div>
   </section>
 
   <!-- --------------------------------------------------------- History -->
@@ -226,6 +263,10 @@
       <label class="field">
         <span>Sound <span class="hint">— falls back to the default when unset</span></span>
         <select id="f-sound"></select>
+      </label>
+      <label class="field" id="f-devices-field">
+        <span>Applies to <span class="hint">— none ticked means every doorbell</span></span>
+        <div class="weekdays" id="f-devices"></div>
       </label>
       <label class="field">
         <span>Priority <span class="hint">— higher excludes lower entirely</span></span>

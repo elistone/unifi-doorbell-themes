@@ -106,6 +106,27 @@ touch a doorbell you have not configured.
 
 Check your work on the **Calendar** tab before waiting for December.
 
+## More than one doorbell
+
+Doorman drives as many as you have. Add them in **Settings → Doorbells**,
+where they are discovered from the controller and given a name you choose —
+"Front door" reads better on a theme than `6489eedb0237c203e400ce18`.
+
+Each doorbell **rotates independently**: two of them sharing the same themes
+will show different GIFs on the same day, because the random choice is seeded
+by the date *and* the doorbell. It stays deterministic, so the calendar still
+predicts a year ahead for each one.
+
+A theme can be restricted to particular doorbells with **Applies to** in the
+theme editor. Leaving it empty means **every** doorbell, which is the default
+on purpose: adding a second doorbell must not silently unschedule the first,
+and themes written before you had two keep working untouched.
+
+Removing a doorbell keeps its themes and history. A theme that applied *only*
+to it is **disabled** rather than quietly spread across the others — the one
+case where "no doorbells" would otherwise flip from "just that one" to "all
+of them".
+
 ## Running it for real
 
 ### Docker
@@ -167,15 +188,15 @@ Everything is an environment variable. Only the first three are required.
 |---|---|---|
 | `PROTECT_HOST` | — | **Required.** UniFi OS console address. |
 | `PROTECT_API_KEY` | — | **Required.** Protect → Settings → Control Plane → Integrations. |
-| `PROTECT_CAMERA_ID` | — | **Required.** From `probe`. |
+| `PROTECT_CAMERA_ID` | — | The first doorbell, adopted on first run. From `probe`. Optional once any doorbell exists — after that they live in the database and are managed in Settings. |
 | `PROTECT_ADMIN_USER` | — | UniFi OS login. Needed for ring sounds and for deleting assets. |
 | `PROTECT_ADMIN_PASS` | — | As above. Without both, images still work. |
 | `PORT` | `8080` | HTTP port. |
 | `DOORMAN_DB` | `data/doorman.sqlite` | Database file. |
 | `DOORMAN_MEDIA` | `media` | GIF library directory. |
-| `DOORMAN_ROLL_HOUR` | `4` | Local hour to change theme. 4am: nobody is at the door. |
+| `DOORMAN_ROLL_HOUR` | `4` | Local hour to change theme. 4am: nobody is at the door. Overridable in Settings. |
 | `DOORMAN_TICK_SECONDS` | `300` | How often to notice the date changed. |
-| `DOORMAN_DEFAULT_RINGTONE` | — | Ringtone id for themes that name none. Without it, a theme with no sound keeps whatever the last one set — so one seasonal sound leaks into the rotation forever. |
+| `DOORMAN_DEFAULT_RINGTONE` | — | Ringtone id for themes that name none. Without it, a theme with no sound keeps whatever the last one set — so one seasonal sound leaks into the rotation forever. Overridable in Settings. |
 | `DOORMAN_SECURE_COOKIES` | `false` | Set `true` when something in front terminates TLS. |
 | `NOTIFY_URL` | — | Pinged on apply, failure and stall. `{status}` and `{msg}` are substituted. |
 | `NOTIFY_METHOD` | `POST` | |
