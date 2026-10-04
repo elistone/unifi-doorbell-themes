@@ -85,6 +85,21 @@ export interface ApplyOptions {
   dryRun?: boolean;
   /** Skip the write when the device already shows the right thing. Default true. */
   skipUnchanged?: boolean;
+  /**
+   * Ringtone to fall back to when the chosen theme names no sound.
+   *
+   * Without this, a theme with no sound leaves the ringtone alone, which
+   * sounds harmless and is not: the previous theme's sound persists. Set
+   * Halloween once and every everyday GIF for the rest of the year answers
+   * the door with a haunted-mansion organ. The image rotates, the sound
+   * does not, and the pairing the whole app exists to guarantee quietly
+   * stops holding.
+   *
+   * So "no sound" means "the default one", not "whatever is there".
+   * Unset, the old inherit-silently behaviour remains, because there is no
+   * sensible ringtone to invent for someone who has not chosen one.
+   */
+  defaultSound?: string;
 }
 
 export async function apply(
@@ -96,7 +111,7 @@ export async function apply(
   notifier?: Notifier,
   sound?: SoundDevice,
 ): Promise<ApplyResult> {
-  const { dryRun = false, skipUnchanged = true } = options;
+  const { dryRun = false, skipUnchanged = true, defaultSound } = options;
   const at = now.toISOString();
 
   const finish = async (result: ApplyResult): Promise<ApplyResult> => {
@@ -199,14 +214,17 @@ export async function apply(
     // the whole scheduler stopping. A doorbell showing the right picture with
     // the wrong chime is a far better failure than one stuck on December's
     // GIF in March.
-    let soundOutcome: ApplyResult["sound"] = theme.sound ? "skipped" : undefined;
-    if (theme.sound && sound) {
+    // A theme with no sound of its own falls back to the default rather than
+    // keeping the last theme's - see defaultSound on ApplyOptions.
+    const wantedSound = theme.sound ?? defaultSound;
+    let soundOutcome: ApplyResult["sound"] = wantedSound ? "skipped" : undefined;
+    if (wantedSound && sound) {
       try {
         const current = await sound.currentRingtone();
-        if (current === theme.sound) {
+        if (current === wantedSound) {
           soundOutcome = "unchanged";
         } else {
-          await sound.setRingtone(theme.sound);
+          await sound.setRingtone(wantedSound);
           soundOutcome = "applied";
         }
       } catch {
@@ -223,7 +241,7 @@ export async function apply(
       themeId: theme.id,
       themeName: theme.name,
       assetName,
-      ringtoneId: theme.sound ?? null,
+      ringtoneId: wantedSound ?? null,
       sound: soundOutcome,
       drift,
     });

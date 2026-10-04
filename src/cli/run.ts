@@ -77,7 +77,15 @@ for (const { filename, assetName } of claimed) {
   console.log(`adopted ${filename} -> ${assetName} (already on the NVR)`);
 }
 
-const result = await apply(store, device, source, at, { dryRun }, undefined, sound);
+const result = await apply(
+  store,
+  device,
+  source,
+  at,
+  { dryRun, defaultSound: process.env.DOORMAN_DEFAULT_RINGTONE },
+  undefined,
+  sound,
+);
 
 console.log(`${result.outcome}: ${result.reason}`);
 if (result.sound) {

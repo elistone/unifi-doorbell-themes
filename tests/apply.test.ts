@@ -372,6 +372,38 @@ describe("sound", () => {
     assert.equal(sound.current, "whatever-was-there", "an imageless theme must not clear the sound");
   });
 
+  it("falls back to the default ringtone when a theme names none", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    sound.current = "ringtone-haunted-mansion";
+    store.upsertTheme(theme("everyday", "hash-a"));
+
+    const result = await apply(
+      store, device, source, now,
+      { defaultSound: "ringtone-stitch" },
+      undefined, sound,
+    );
+    assert.equal(result.sound, "applied");
+    assert.equal(
+      sound.current,
+      "ringtone-stitch",
+      "last season's sound must not survive into the everyday rotation",
+    );
+  });
+
+  it("prefers the theme's own sound over the default", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "ringtone-elf" });
+
+    await apply(
+      store, device, source, now,
+      { defaultSound: "ringtone-stitch" },
+      undefined, sound,
+    );
+    assert.equal(sound.current, "ringtone-elf");
+  });
+
   it("still applies the image when the sound half fails", async () => {
     // Sound lives on the private API, which breaks between Protect releases.
     // A doorbell showing the right picture with the wrong chime beats one

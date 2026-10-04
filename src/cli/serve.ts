@@ -73,7 +73,15 @@ async function tick(): Promise<void> {
     const dropped = await reconcile(store, source);
     for (const name of dropped) log(`forgot ${name} - no longer on the NVR`);
 
-    const result = await apply(store, device, source, now, {}, notifier, sound);
+    const result = await apply(
+      store,
+      device,
+      source,
+      now,
+      { defaultSound: process.env.DOORMAN_DEFAULT_RINGTONE },
+      notifier,
+      sound,
+    );
     store.setLastRolledDate(today);
     log(`${result.outcome}: ${result.reason}${result.sound ? ` [ringtone ${result.sound}]` : ""}`);
     if (result.drift) {
