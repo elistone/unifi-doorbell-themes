@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.2.1 - 2026-10-04
+
 ### Added
 
 - A thin progress bar at the top of the page during any request, driven by
