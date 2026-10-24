@@ -5,6 +5,19 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Fixed
+
+- **`run.ts` was never made device-aware.** Left unchanged when doorbells
+  moved into the database in 0.4.0, it passed no device to `apply()`, so
+  the fallback id `"default"` was used — a different random seed from the
+  scheduler, picking a different theme from the same schedule, and writing
+  its rotation cursor and history under a doorbell that does not exist.
+  Nothing failed; the CLI and the daemon just quietly disagreed. It now
+  covers every enabled doorbell, or one named with `--device`.
+- A test now reads every `apply()` call site and fails if one does not say
+  which doorbell it means. Node strips types rather than checking them, so
+  making the field required would not have caught this.
+
 ## 0.5.0 - 2026-10-04
 
 ### Added

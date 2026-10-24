@@ -270,3 +270,57 @@ describe("migrating a single-doorbell database", () => {
     assert.equal(legacy.themesFor("only").length, 1, "an old theme still applies");
   });
 });
+
+describe("every caller names the doorbell it is driving", () => {
+  it("has no apply() call site that omits deviceId", async () => {
+    /**
+     * A structural guard, because this bug shipped.
+     *
+     * `apply()` falls back to the id "default" when no device is given, so
+     * `run.ts` - left unchanged when doorbells moved into the database -
+     * silently used a different random seed from the scheduler, picked a
+     * different theme from the same schedule, and wrote its cursor and
+     * history under a doorbell that does not exist. Nothing failed; the
+     * two just quietly disagreed.
+     *
+     * Node strips the types rather than checking them, so making deviceId
+     * required would not have caught it either. Reading the call sites is
+     * what catches it.
+     */
+    const { readdir, readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+
+    const root = new URL("../src/", import.meta.url).pathname;
+    const offenders: string[] = [];
+
+    async function* walk(dir: string): AsyncGenerator<string> {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) yield* walk(path);
+        else if (entry.name.endsWith(".ts")) yield path;
+      }
+    }
+
+    for await (const file of walk(root)) {
+      // apply.ts is where the default lives; it is not a caller.
+      if (file.endsWith("/apply.ts")) continue;
+      const source = await readFile(file, "utf8");
+
+      // Each `apply(` call, from the opening paren to the matching close.
+      for (const match of source.matchAll(/\bawait apply\(/g)) {
+        let depth = 0;
+        let end = match.index! + match[0].length - 1;
+        for (; end < source.length; end++) {
+          if (source[end] === "(") depth++;
+          else if (source[end] === ")" && --depth === 0) break;
+        }
+        const call = source.slice(match.index!, end);
+        if (!call.includes("deviceId")) {
+          offenders.push(file.slice(root.length));
+        }
+      }
+    }
+
+    assert.deepEqual(offenders, [], "these apply() calls do not say which doorbell they mean");
+  });
+});

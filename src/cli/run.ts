@@ -1,11 +1,17 @@
 /**
  * Evaluate the schedule and apply the result, once.
  *
- *   node src/cli/run.ts            apply for real
- *   node src/cli/run.ts --dry-run  say what would happen, change nothing
+ *   node src/cli/run.ts                      every enabled doorbell
+ *   node src/cli/run.ts --device "Front door"  just that one
+ *   node src/cli/run.ts --dry-run              say what would happen
  *
- * The daemon will call the same `apply()` on a timer. Keeping this a thin
- * wrapper is what stops the preview and the real thing drifting apart.
+ * The daemon calls the same `apply()` on a timer. Keeping this a thin
+ * wrapper is what stops the preview and the real thing drifting apart -
+ * which is exactly what happened when this was left single-device after
+ * doorbells moved into the database: it passed no device, so `apply()`
+ * fell back to the id "default", picked a different theme from the same
+ * schedule, and wrote its state and history under a doorbell that does
+ * not exist.
  */
 import { adopt, apply, reconcile } from "../apply.ts";
 import { DirectoryAssetSource, ProtectImageDevice, ProtectSoundDevice } from "../device/adapter.ts";
@@ -31,14 +37,16 @@ if (atFlag !== -1 && !dryRun) {
   process.exit(1);
 }
 
+const deviceFlag = process.argv.indexOf("--device");
+const wanted = deviceFlag === -1 ? undefined : process.argv[deviceFlag + 1];
+
 const host = process.env.PROTECT_HOST;
 const apiKey = process.env.PROTECT_API_KEY;
-const cameraId = process.env.PROTECT_CAMERA_ID;
 const dbPath = process.env.DOORMAN_DB ?? "data/doorman.sqlite";
 const mediaDir = process.env.DOORMAN_MEDIA ?? "media";
 
-if (!host || !apiKey || !cameraId) {
-  console.error("Set PROTECT_HOST, PROTECT_API_KEY and PROTECT_CAMERA_ID. See .env.example.");
+if (!host || !apiKey) {
+  console.error("Set PROTECT_HOST and PROTECT_API_KEY. See .env.example.");
   process.exit(1);
 }
 
@@ -48,7 +56,6 @@ const protect = new Protect({
   insecureTls: process.env.PROTECT_INSECURE_TLS !== "false",
 });
 const store = new Store(dbPath);
-const device = new ProtectImageDevice(protect, cameraId);
 const source = new DirectoryAssetSource(mediaDir, protect);
 
 // Sound is optional. Without admin credentials the app runs images-only,
@@ -56,10 +63,36 @@ const source = new DirectoryAssetSource(mediaDir, protect);
 // not a degraded mode.
 const adminUser = process.env.PROTECT_ADMIN_USER;
 const adminPass = process.env.PROTECT_ADMIN_PASS;
-const sound =
+const priv =
   adminUser && adminPass
-    ? new ProtectSoundDevice(new PrivateApi({ host, username: adminUser, password: adminPass }), cameraId)
+    ? new PrivateApi({ host, username: adminUser, password: adminPass })
     : undefined;
+
+/** The doorbells this invocation covers. */
+const targets = (() => {
+  const devices = store.devices();
+  if (devices.length === 0) {
+    console.error("No doorbell is configured. Add one with:");
+    console.error("  node src/cli/themes.ts devices add <camera-id> <name>");
+    process.exit(1);
+  }
+  if (!wanted) return devices.filter((d) => d.enabled);
+
+  const found =
+    devices.find((d) => d.id === wanted) ??
+    devices.find((d) => d.name.toLowerCase() === wanted.toLowerCase());
+  if (!found) {
+    console.error(`No doorbell called "${wanted}".`);
+    console.error(`Known: ${devices.map((d) => d.name).join(", ")}`);
+    process.exit(1);
+  }
+  return [found];
+})();
+
+if (targets.length === 0) {
+  console.error("Every doorbell is disabled, so there is nothing to apply.");
+  process.exit(1);
+}
 
 await protect.assertSupportedVersion();
 
@@ -77,29 +110,43 @@ for (const { filename, assetName } of claimed) {
   console.log(`adopted ${filename} -> ${assetName} (already on the NVR)`);
 }
 
-const result = await apply(
-  store,
-  device,
-  source,
-  at,
-  { dryRun, defaultSound: process.env.DOORMAN_DEFAULT_RINGTONE },
-  undefined,
-  sound,
-);
+// Sequential, matching the daemon: several uploads at once is how you find
+// out what the NVR's request limit is.
+let failed = false;
+const several = targets.length > 1;
 
-console.log(`${result.outcome}: ${result.reason}`);
-if (result.sound) {
-  console.log(`  ringtone: ${result.sound}${result.ringtoneId ? ` (${result.ringtoneId})` : ""}`);
-}
-if (result.sound === "skipped") {
-  console.log("  (set PROTECT_ADMIN_USER and PROTECT_ADMIN_PASS to control the ring sound)");
-}
-if (result.drift) {
-  console.log(
-    `  drift: expected ${result.drift.expected}, found ${result.drift.found} ` +
-      `(someone changed it in Protect - leaving their change alone)`,
+for (const target of targets) {
+  const result = await apply(
+    store,
+    new ProtectImageDevice(protect, target.id),
+    source,
+    at,
+    {
+      dryRun,
+      defaultSound: store.setting("defaultRingtone") ?? process.env.DOORMAN_DEFAULT_RINGTONE,
+      deviceId: target.id,
+      deviceName: target.name,
+    },
+    undefined,
+    priv ? new ProtectSoundDevice(priv, target.id) : undefined,
   );
+
+  const prefix = several ? `${target.name}: ` : "";
+  console.log(`${prefix}${result.outcome}: ${result.reason}`);
+  if (result.sound) {
+    console.log(`  ringtone: ${result.sound}${result.ringtoneId ? ` (${result.ringtoneId})` : ""}`);
+  }
+  if (result.sound === "skipped") {
+    console.log("  (set PROTECT_ADMIN_USER and PROTECT_ADMIN_PASS to control the ring sound)");
+  }
+  if (result.drift) {
+    console.log(
+      `  drift: expected ${result.drift.expected}, found ${result.drift.found} ` +
+        `(someone changed it in Protect - leaving their change alone)`,
+    );
+  }
+  if (result.outcome === "failed") failed = true;
 }
 
 store.close();
-process.exit(result.outcome === "failed" ? 1 : 0);
+process.exit(failed ? 1 : 0);
