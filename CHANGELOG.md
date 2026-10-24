@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.6.1 - 2026-10-24
+
 ## 0.6.0 - 2026-10-24
 
 ### Added
