@@ -232,7 +232,9 @@ switch (command) {
       console.log("Every theme sound resolves.");
       break;
     }
-    console.log(`${broken.length} theme sound${broken.length === 1 ? "" : "s"} point at nothing on this console:`);
+    console.log(
+      `${broken.length} theme sound${broken.length === 1 ? " points" : "s point"} at nothing on this console:`,
+    );
     for (const b of broken) {
       console.log(
         `  ${b.theme.id.padEnd(22)} wanted ${b.theme.soundName ? `"${b.theme.soundName}"` : "an unrecorded sound"}` +
