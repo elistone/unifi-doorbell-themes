@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.5.1 - 2026-10-24
+
 ### Fixed
 
 - **`run.ts` was never made device-aware.** Left unchanged when doorbells
