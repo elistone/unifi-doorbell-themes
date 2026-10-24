@@ -5,6 +5,21 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **Themes remember the ring sound's name, not just its id.** Ringtone ids
+  are issued per console, so migrating Protect to a different NVR
+  invalidated every custom one at once and left themes pointing at nothing
+  with no record of what they had wanted — the id alone cannot tell you
+  which sound to re-upload.
+- The Sounds tab now explains which themes are broken and what each wanted,
+  and offers a **Re-link** button once the audio exists again under the
+  same name. `themes.ts sounds` and `themes.ts sounds relink` do the same
+  from the command line.
+- Re-linking only ever touches a theme whose id does *not* resolve. A theme
+  pointing at a live ringtone is left alone even if another shares its
+  name, because while the id works it is the authoritative answer.
+
 ## 0.5.1 - 2026-10-24
 
 ### Fixed

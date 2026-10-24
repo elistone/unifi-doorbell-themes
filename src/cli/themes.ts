@@ -3,6 +3,8 @@
  *
  *   node src/cli/themes.ts list
  *   node src/cli/themes.ts ringtones
+ *   node src/cli/themes.ts sounds          what is broken, and why
+ *   node src/cli/themes.ts sounds relink   re-attach by name after a migration
  *   node src/cli/themes.ts devices
  *   node src/cli/themes.ts devices add 6489eedb0237c203e400ce18 "Front door"
  *   node src/cli/themes.ts devices rename "Front door" "Porch"
@@ -28,6 +30,7 @@ import { hashBytes } from "../apply.ts";
 import { PrivateApi } from "../device/private.ts";
 import { Protect } from "../device/protect.ts";
 import { Store } from "../store/db.ts";
+import { brokenSounds, relinkSounds, soundStatus } from "../sounds.ts";
 import type { Device, Rule } from "../domain/types.ts";
 
 const args = process.argv.slice(2);
@@ -89,7 +92,7 @@ switch (command) {
         `${t.enabled ? " " : "-"} ${t.id.padEnd(22)} p${String(t.priority).padEnd(3)} ${when}`,
       );
       console.log(
-        `    image ${t.image.slice(0, 12)}…${t.sound ? `  sound ${t.sound}` : "  (no sound)"}` +
+        `    image ${t.image.slice(0, 12)}…${t.sound ? `  sound ${t.soundName ?? t.sound}` : "  (no sound)"}` +
           // Only worth the line when there is more than one doorbell to
           // choose between.
           (several ? `\n    on    ${describeScope(t.devices)}` : ""),
@@ -204,6 +207,47 @@ switch (command) {
     process.exit(1);
   }
 
+  case "sounds": {
+    const user = process.env.PROTECT_ADMIN_USER;
+    const pass = process.env.PROTECT_ADMIN_PASS;
+    if (!user || !pass || !process.env.PROTECT_HOST) {
+      console.error("Needs PROTECT_HOST, PROTECT_ADMIN_USER and PROTECT_ADMIN_PASS.");
+      process.exit(1);
+    }
+    if (process.env.PROTECT_INSECURE_TLS !== "false") process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+    const api = new PrivateApi({ host: process.env.PROTECT_HOST, username: user, password: pass });
+    const ringtones = await api.ringtones();
+
+    if (args[1] === "relink") {
+      const relinked = relinkSounds(store, store.themes(), ringtones);
+      if (relinked.length === 0) {
+        console.log("Nothing to re-link: no broken sound has a same-named ringtone here.");
+      }
+      for (const r of relinked) console.log(`  ${r.themeId}: re-linked to "${r.name}" (${r.to})`);
+      break;
+    }
+
+    const broken = brokenSounds(soundStatus(store.themes(), ringtones));
+    if (broken.length === 0) {
+      console.log("Every theme sound resolves.");
+      break;
+    }
+    console.log(`${broken.length} theme sound${broken.length === 1 ? "" : "s"} point at nothing on this console:`);
+    for (const b of broken) {
+      console.log(
+        `  ${b.theme.id.padEnd(22)} wanted ${b.theme.soundName ? `"${b.theme.soundName}"` : "an unrecorded sound"}` +
+          `${b.candidate ? "  -> can re-link" : ""}`,
+      );
+    }
+    const ready = broken.filter((b) => b.candidate).length;
+    console.log(
+      ready > 0
+        ? `\nRun \`themes.ts sounds relink\` to re-attach ${ready}.`
+        : "\nUpload the audio again under the same name, then run `themes.ts sounds relink`.",
+    );
+    break;
+  }
+
   case "ringtones": {
     // Needs admin credentials, because ringtones live on the private API.
     const user = process.env.PROTECT_ADMIN_USER;
@@ -260,11 +304,28 @@ switch (command) {
       ? doorbells.split(",").map((n) => findDevice(n.trim()).id)
       : [];
 
+    // Record the ringtone's name as well as its id - ids are per-console,
+    // and the name is what makes a theme re-attachable after a migration.
+    let soundName: string | undefined;
+    const soundId = flag("sound");
+    if (soundId && process.env.PROTECT_HOST && process.env.PROTECT_ADMIN_USER) {
+      if (process.env.PROTECT_INSECURE_TLS !== "false") {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+      }
+      const api = new PrivateApi({
+        host: process.env.PROTECT_HOST,
+        username: process.env.PROTECT_ADMIN_USER,
+        password: process.env.PROTECT_ADMIN_PASS ?? "",
+      });
+      soundName = (await api.ringtones().catch(() => [])).find((r) => r.id === soundId)?.name;
+    }
+
     store.upsertTheme({
       id,
       name: flag("name") ?? id,
       image: hash,
-      sound: flag("sound"),
+      sound: soundId,
+      soundName,
       priority: Number(flag("priority") ?? 0),
       enabled: true,
       rules: [rule],
@@ -286,7 +347,7 @@ switch (command) {
   }
 
   default:
-    console.error("Commands: list, add, remove, devices, ringtones");
+    console.error("Commands: list, add, remove, devices, ringtones, sounds");
     process.exit(1);
 }
 

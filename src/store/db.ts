@@ -40,7 +40,8 @@ const SCHEMA = `
     id        TEXT PRIMARY KEY,
     name      TEXT    NOT NULL,
     image     TEXT    NOT NULL,              -- content hash, resolved via assets
-    sound     TEXT,                          -- content hash; null until sound lands
+    sound     TEXT,                          -- ringtone id, per-console
+    sound_name TEXT,                         -- its name, so it survives a migration
     priority  INTEGER NOT NULL DEFAULT 0,
     enabled   INTEGER NOT NULL DEFAULT 1,
     rules     TEXT    NOT NULL DEFAULT '[]', -- JSON array of Rule
@@ -147,6 +148,9 @@ export class Store {
     if (!columns("applies").has("device_id")) {
       this.#db.exec("ALTER TABLE applies ADD COLUMN device_id TEXT");
     }
+    if (!columns("themes").has("sound_name")) {
+      this.#db.exec("ALTER TABLE themes ADD COLUMN sound_name TEXT");
+    }
   }
 
   close(): void {
@@ -176,10 +180,11 @@ export class Store {
   upsertTheme(theme: Theme): void {
     this.#db
       .prepare(
-        `INSERT INTO themes (id, name, image, sound, priority, enabled, rules, devices)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO themes (id, name, image, sound, sound_name, priority, enabled, rules, devices)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name, image = excluded.image, sound = excluded.sound,
+           sound_name = excluded.sound_name,
            priority = excluded.priority, enabled = excluded.enabled,
            rules = excluded.rules, devices = excluded.devices`,
       )
@@ -188,6 +193,7 @@ export class Store {
         theme.name,
         theme.image,
         theme.sound ?? null,
+        theme.soundName ?? null,
         theme.priority,
         theme.enabled ? 1 : 0,
         JSON.stringify(theme.rules),
@@ -522,6 +528,7 @@ function toTheme(row: Record<string, unknown>): Theme {
     name: String(row.name),
     image: String(row.image),
     sound: row.sound == null ? undefined : String(row.sound),
+    soundName: row.sound_name == null ? undefined : String(row.sound_name),
     priority: Number(row.priority),
     enabled: Number(row.enabled) === 1,
     rules: JSON.parse(String(row.rules)) as Rule[],

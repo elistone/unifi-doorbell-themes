@@ -640,7 +640,15 @@ async function renderThemes() {
           </div>
           <div class="meta">
             ${esc(theme.rules.map(describeRule).join("  or  "))}
-            · ${sound ? esc(sound.name) : theme.sound ? `<span style="color:var(--bad)">sound missing</span>` : "default sound"}
+            · ${
+              sound
+                ? esc(sound.name)
+                : theme.soundMissing
+                  ? `<span style="color:var(--bad)">sound missing${theme.soundName ? `: ${esc(theme.soundName)}` : ""}</span>`
+                  : theme.sound
+                    ? esc(theme.soundName ?? "sound set")
+                    : "default sound"
+            }
             ${
               devices.length > 1
                 ? ` · ${
@@ -966,8 +974,39 @@ async function renderSounds() {
     )
     .join("");
 
+  // A migration invalidates every custom ringtone id at once, so this is
+  // worth surfacing where the sounds are rather than only on each theme.
+  let broken = [];
+  try {
+    broken = await api("/api/sounds/broken");
+  } catch {
+    // No admin credentials; the list above already explains that.
+  }
+  const repairable = broken.filter((b) => b.canRelinkTo).length;
+
   const full = sounds.ringtones.length >= sounds.limit;
   $("#sounds-list").innerHTML = `
+    ${
+      broken.length === 0
+        ? ""
+        : `<div class="notice">
+             <strong>${broken.length} theme${broken.length === 1 ? "" : "s"} point at a ring sound this console does not have.</strong>
+             Ringtone ids are issued per console, so migrating Protect breaks them all at once.
+             <ul>${broken
+               .map(
+                 (b) =>
+                   `<li>${esc(b.themeName)} wanted <strong>${esc(b.wants ?? "an unknown sound")}</strong>${
+                     b.canRelinkTo ? ` — <span style="color:var(--ok)">found, ready to re-link</span>` : ""
+                   }</li>`,
+               )
+               .join("")}</ul>
+             ${
+               repairable > 0
+                 ? `<button class="btn primary small" id="relink-sounds">Re-link ${repairable} sound${repairable === 1 ? "" : "s"}</button>`
+                 : `<p class="sub" style="margin:8px 0 0">Upload the audio again under the same name and this becomes a single click.</p>`
+             }
+           </div>`
+    }
     <p class="sub">
       ${sounds.ringtones.length} of ${sounds.limit} slots used.
       ${full ? `<strong style="color:var(--bad)">Full — delete one before uploading.</strong>` : ""}
@@ -976,6 +1015,19 @@ async function renderSounds() {
       <thead><tr><th>Name</th><th>Id</th><th></th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+
+  $("#relink-sounds")?.addEventListener("click", (e) =>
+    withBusy(e.target, async () => {
+      const { relinked } = await api("/api/sounds/relink", { method: "POST" });
+      toast(
+        relinked.length === 0
+          ? "Nothing matched by name."
+          : `Re-linked ${relinked.map((r) => r.name).join(", ")}.`,
+        "ok",
+      );
+      await renderSounds();
+    }),
+  );
 
   $$("[data-del-sound]").forEach((b) =>
     b.addEventListener("click", async () => {

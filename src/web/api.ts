@@ -21,6 +21,7 @@ import { analyseGif } from "../media/analyse.ts";
 import type { GifAnalysis } from "../media/analyse.ts";
 import { fitToLimit } from "../media/transform.ts";
 import { Thumbnailer } from "../media/thumbnail.ts";
+import { brokenSounds, relinkSounds, soundStatus } from "../sounds.ts";
 import { MAX_RINGTONES } from "../device/private.ts";
 import type { PrivateApi } from "../device/private.ts";
 import type { Protect } from "../device/protect.ts";
@@ -249,11 +250,21 @@ export function createApi(deps: ApiDeps) {
     };
   }
 
-  async function themesWithMedia(): Promise<Array<Theme & { filename: string | null; missing: boolean }>> {
+  async function themesWithMedia() {
     const files = await mediaIndex();
+    const ringtones = await (priv?.ringtones().catch(() => []) ?? Promise.resolve([]));
+    const live = new Set(ringtones.map((r) => r.id));
+
     return store.themes().map((theme) => {
       const filename = files.get(theme.image) ?? null;
-      return { ...theme, filename, missing: filename === null };
+      return {
+        ...theme,
+        filename,
+        missing: filename === null,
+        // Only meaningful when we could actually read the ringtone list;
+        // no admin credentials must not look like every sound is broken.
+        soundMissing: Boolean(priv) && Boolean(theme.sound) && !live.has(theme.sound),
+      };
     });
   }
 
@@ -421,11 +432,24 @@ export function createApi(deps: ApiDeps) {
         ? [...new Set(body.devices.filter((id) => known.has(id)))]
         : (store.themes().find((t) => t.id === body.id)?.devices ?? []);
 
+      // Remember the ringtone's NAME as well as its id. Ids are per-console,
+      // so the name is the only thing that survives a Protect migration and
+      // lets the sound be re-attached afterwards.
+      let soundName: string | undefined;
+      if (body.sound && priv) {
+        soundName = (await priv.ringtones().catch(() => []))
+          .find((r) => r.id === body.sound)?.name;
+      }
+
       const theme: Theme = {
         id: safeName(body.id),
         name: body.name?.trim() || body.id,
         image,
         sound: body.sound || undefined,
+        // Keep the previous name if the lookup failed, rather than erasing
+        // the one piece of evidence that makes re-linking possible.
+        soundName:
+          soundName ?? store.themes().find((t) => t.id === body.id)?.soundName,
         priority: Number(body.priority ?? 0),
         enabled: body.enabled !== false,
         rules: Array.isArray(body.rules) && body.rules.length > 0 ? (body.rules as Rule[]) : [{}],
@@ -523,6 +547,30 @@ export function createApi(deps: ApiDeps) {
       const output = join(mediaDir, `${basename(filename, extname(filename))}-fitted.gif`);
       const result = await fitToLimit(input, output);
       return { from: filename, to: basename(output), ...result };
+    },
+
+    /**
+     * Which theme sounds no longer resolve, and whether anything on the
+     * console could be re-attached to them.
+     */
+    "GET /api/sounds/broken": async () => {
+      if (!priv) throw new HttpError(503, "Ring sounds need admin credentials.");
+      const ringtones = await priv.ringtones();
+      return brokenSounds(soundStatus(store.themes(), ringtones)).map((s) => ({
+        themeId: s.theme.id,
+        themeName: s.theme.name,
+        wants: s.theme.soundName ?? null,
+        missingId: s.theme.sound,
+        // Non-null once the audio has been uploaded again under that name.
+        canRelinkTo: s.candidate ? { id: s.candidate.id, name: s.candidate.name } : null,
+      }));
+    },
+
+    /** Re-attach every broken sound that now has a same-named ringtone. */
+    "POST /api/sounds/relink": async () => {
+      if (!priv) throw new HttpError(503, "Ring sounds need admin credentials.");
+      const relinked = relinkSounds(store, store.themes(), await priv.ringtones());
+      return { relinked };
     },
 
     "GET /api/ringtones": async () => {

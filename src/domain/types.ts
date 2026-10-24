@@ -72,6 +72,20 @@ export interface Theme {
    * scheduling. Omit it and the theme leaves the ring sound alone.
    */
   sound?: string;
+
+  /**
+   * The ring sound's NAME, remembered alongside its id.
+   *
+   * Ringtone ids are per-console. Migrating Protect to a different NVR
+   * invalidated every custom id at once and left five themes pointing at
+   * nothing, with no record of what they had wanted - the id alone cannot
+   * tell you which sound to re-upload.
+   *
+   * The id stays authoritative while it resolves; this is what lets a
+   * theme be re-linked by name after a migration, and what lets the UI say
+   * "wanted stitch_music" instead of a dead hex string.
+   */
+  soundName?: string;
   /**
    * Higher wins. Themes at a lower priority are not candidates at all when a
    * higher one matches - this is what makes "Christmas beats Friday evening"

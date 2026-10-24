@@ -697,3 +697,18 @@ input[type="password"] {
 /* Icon-only buttons should be square rather than inheriting the padding
    of one that has a label. */
 #toggle-theme { padding: 7px 9px; }
+
+/* A standing problem that needs a decision, as opposed to a toast, which
+   is about something that just happened and then goes away. */
+.notice {
+  border: 1px solid var(--warn);
+  background: var(--warn-bg);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.notice strong { display: block; margin-bottom: 4px; }
+.notice ul { margin: 8px 0 12px; padding-left: 20px; }
+.notice li { margin: 3px 0; }
