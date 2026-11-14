@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.8.0 - 2026-11-14
+
 ### Added
 
 - **A sound library.** Ring sounds are kept by Doorman in `media/sounds/`,
