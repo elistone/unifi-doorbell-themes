@@ -64,6 +64,21 @@ const SCHEMA = `
     uploaded_at   TEXT NOT NULL
   );
 
+  -- The ring sound manifest. Library sound hash -> the ringtone the
+  -- controller gave back for it.
+  --
+  -- The images manifest keeps an entry forever, because animations are
+  -- uncapped. Ringtones are not, so these are a CACHE: an entry is removed
+  -- when its ringtone is evicted to make room, and the file in the library
+  -- is what lets it be uploaded again. last_used is what eviction orders by.
+  CREATE TABLE IF NOT EXISTS ringtones (
+    hash        TEXT PRIMARY KEY,
+    ringtone_id TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL,
+    last_used   TEXT NOT NULL
+  );
+
   -- Runtime state. Deliberately not in the config tables.
   CREATE TABLE IF NOT EXISTS state (
     key   TEXT PRIMARY KEY,
@@ -108,6 +123,14 @@ export interface AssetRecord {
   originalName: string;
   size: number | null;
   uploadedAt: string;
+}
+
+export interface RingtoneRecord {
+  hash: string;
+  ringtoneId: string;
+  name: string;
+  uploadedAt: string;
+  lastUsed: string;
 }
 
 export type Outcome = "applied" | "unchanged" | "failed" | "dry-run" | "no-theme";
@@ -326,6 +349,46 @@ export class Store {
       }
     }
     return dropped;
+  }
+
+  // ------------------------------------------------------------ ringtones
+
+  ringtoneFor(hash: string): RingtoneRecord | null {
+    return this.ringtoneRecords().find((r) => r.hash === hash) ?? null;
+  }
+
+  /** Every library sound believed to be on the controller, least recently used first. */
+  ringtoneRecords(): RingtoneRecord[] {
+    const rows = this.#db
+      .prepare("SELECT * FROM ringtones ORDER BY last_used, uploaded_at")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      hash: String(row.hash),
+      ringtoneId: String(row.ringtone_id),
+      name: String(row.name),
+      uploadedAt: String(row.uploaded_at),
+      lastUsed: String(row.last_used),
+    }));
+  }
+
+  recordRingtone(record: RingtoneRecord): void {
+    this.#db
+      .prepare(
+        `INSERT INTO ringtones (hash, ringtone_id, name, uploaded_at, last_used)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(hash) DO UPDATE SET
+           ringtone_id = excluded.ringtone_id, name = excluded.name,
+           uploaded_at = excluded.uploaded_at, last_used = excluded.last_used`,
+      )
+      .run(record.hash, record.ringtoneId, record.name, record.uploadedAt, record.lastUsed);
+  }
+
+  touchRingtone(hash: string, at: string): void {
+    this.#db.prepare("UPDATE ringtones SET last_used = ? WHERE hash = ?").run(at, hash);
+  }
+
+  forgetRingtone(hash: string): void {
+    this.#db.prepare("DELETE FROM ringtones WHERE hash = ?").run(hash);
   }
 
   // ---------------------------------------------------------------- state

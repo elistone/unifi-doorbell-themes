@@ -61,7 +61,7 @@ export function createHandler(deps: RouterDeps) {
     return d ? store.sessionUser(d) : null;
   };
 
-  const { routes, serveMedia, serveThumbnail, serveStaged } = createApi({ ...deps, callerOf, sessionDigestOf });
+  const { routes, serveMedia, serveThumbnail, serveStaged, serveLibrarySound } = createApi({ ...deps, callerOf, sessionDigestOf });
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -95,6 +95,12 @@ export function createHandler(deps: RouterDeps) {
       // The animation itself, for where the animation is the point.
       if (method === "GET" && url.pathname.startsWith("/media/")) {
         await serveMedia(decodeURIComponent(url.pathname.slice("/media/".length)), res);
+        return;
+      }
+
+      // A ring sound from the library, to listen to.
+      if (method === "GET" && url.pathname.startsWith("/library-sound/")) {
+        await serveLibrarySound(decodeURIComponent(url.pathname.slice("/library-sound/".length)), res);
         return;
       }
 

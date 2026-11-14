@@ -23,10 +23,12 @@ import { fitToLimit } from "../media/transform.ts";
 import { Thumbnailer } from "../media/thumbnail.ts";
 import { centreCrop, probeDuration, renderAudio, renderGif } from "../media/edit.ts";
 import type { Crop } from "../media/edit.ts";
-import { hasYtDlp, importLink } from "../media/remote.ts";
+import { hasYtDlp, importLink, sniff } from "../media/remote.ts";
 import type { FreesoundSearch, GiphySearch } from "../media/search.ts";
 import { Staging } from "../media/staging.ts";
-import { brokenSounds, relinkSounds, soundStatus } from "../sounds.ts";
+import { brokenSounds, isLibraryRef, libraryHash, libraryRef, relinkSounds, soundStatus } from "../sounds.ts";
+import type { SoundLibrary } from "../media/soundlib.ts";
+import type { RingtoneCache } from "../ringtones.ts";
 import { MAX_RINGTONES } from "../device/private.ts";
 import type { PrivateApi } from "../device/private.ts";
 import type { Protect } from "../device/protect.ts";
@@ -68,6 +70,10 @@ export interface ApiDeps {
   soundSearch?: FreesoundSearch;
   /** Injected so the import routes are testable without the network. */
   fetch?: typeof fetch;
+  /** Ring sounds kept on disk. Uploaded to the controller as themes need them. */
+  soundLibrary?: SoundLibrary;
+  /** The controller's slots as a cache over the library. Needs admin credentials. */
+  ringtones?: RingtoneCache;
   protectVersion: string;
   /** Read per call, so a change in Settings applies without a restart. */
   defaultSound?: () => string | undefined;
@@ -97,7 +103,6 @@ const DUMMY_HASH =
   "scrypt$00000000000000000000000000000000$" + "0".repeat(128);
 
 const GIF_EXTENSIONS = new Set([".gif"]);
-const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".flac"]);
 
 export class HttpError extends Error {
   readonly status: number;
@@ -254,6 +259,16 @@ export function createApi(deps: ApiDeps) {
     return token;
   }
 
+  /** The sound library, or nothing when this deployment has none. */
+  async function library_() {
+    return deps.soundLibrary ? deps.soundLibrary.list() : [];
+  }
+
+  function requireLibrary(): SoundLibrary {
+    if (!deps.soundLibrary) throw new HttpError(503, "This deployment has no sound library.");
+    return deps.soundLibrary;
+  }
+
   /** Hash -> filename, so themes can show what they point at. */
   async function mediaIndex(): Promise<Map<string, string>> {
     return source.localFiles();
@@ -290,6 +305,12 @@ export function createApi(deps: ApiDeps) {
     const files = await mediaIndex();
     const ringtones = await (priv?.ringtones().catch(() => []) ?? Promise.resolve([]));
     const live = new Set(ringtones.map((r) => r.id));
+    const library = new Set((await library_()).map((l) => l.hash));
+
+    // A library sound is missing only if its FILE has gone; not being on
+    // the controller is normal, and fixed by the next apply.
+    const soundMissing = (sound: string | undefined) =>
+      !sound ? false : isLibraryRef(sound) ? !library.has(libraryHash(sound)) : Boolean(priv) && !live.has(sound);
 
     return store.themes().map((theme) => {
       const filename = files.get(theme.image) ?? null;
@@ -299,7 +320,7 @@ export function createApi(deps: ApiDeps) {
         missing: filename === null,
         // Only meaningful when we could actually read the ringtone list;
         // no admin credentials must not look like every sound is broken.
-        soundMissing: Boolean(priv) && Boolean(theme.sound) && !live.has(theme.sound),
+        soundMissing: soundMissing(theme.sound),
       };
     });
   }
@@ -479,7 +500,11 @@ export function createApi(deps: ApiDeps) {
       // so the name is the only thing that survives a Protect migration and
       // lets the sound be re-attached afterwards.
       let soundName: string | undefined;
-      if (body.sound && priv) {
+      if (isLibraryRef(body.sound)) {
+        const hash = libraryHash(body.sound);
+        soundName = (await library_()).find((l) => l.hash === hash)?.name;
+        if (!soundName) throw new HttpError(400, "That sound is not in the library.");
+      } else if (body.sound && priv) {
         soundName = (await priv.ringtones().catch(() => []))
           .find((r) => r.id === body.sound)?.name;
       }
@@ -655,6 +680,38 @@ export function createApi(deps: ApiDeps) {
     },
 
     /**
+     * A file from this computer, into staging, for the same editors.
+     *
+     * Ring sounds go through here rather than straight to the controller,
+     * so an uploaded sound is trimmed, converted to a real MP3, and kept in
+     * the library like any other.
+     */
+    "POST /api/staging/upload": async (req, url) => {
+      const kind = url.searchParams.get("kind") === "audio" ? "audio" : "gif";
+      const { name, bytes } = await readUpload(req);
+      const extension = sniff(bytes);
+      if (kind === "gif" ? extension !== "gif" : !extension || extension === "gif") {
+        throw new HttpError(400, `${name} is not ${kind === "gif" ? "a GIF" : "an audio file this can read"}.`);
+      }
+      const id = await staging.put(bytes, extension!);
+      const path = staging.path(id)!;
+      if (kind === "audio") {
+        return { id, kind, durationSeconds: await asBadRequest(() => probeDuration(path)) };
+      }
+      const analysis = await asBadRequest(async () => analyseGif(path, (await stat(path)).size));
+      return {
+        id,
+        kind,
+        width: analysis.width,
+        height: analysis.height,
+        frames: analysis.frames,
+        durationSeconds: analysis.durationSeconds,
+        crop: centreCrop(analysis.width, analysis.height),
+        safeFrames: ALWAYS_SAFE_FRAMES,
+      };
+    },
+
+    /**
      * Crop and trim a staged GIF into a new staged GIF, for preview.
      *
      * The result is square, 240px, and never more frames than always fit -
@@ -724,23 +781,63 @@ export function createApi(deps: ApiDeps) {
       return { id, ...result };
     },
 
-    /** Send a rendered sound to the doorbell as a ring sound. */
-    "POST /api/ringtones/keep": async (req) => {
-      if (!priv) throw new HttpError(503, "Ring sounds need admin credentials.");
-      const body = await readJson<{ id?: string; name?: string }>(req);
+    /**
+     * Keep a rendered sound in the library.
+     *
+     * Never fails because the controller is full - that is the point of the
+     * library. With `upload`, it is also put on the controller now, making
+     * room if it has to, for someone who wants to press the bell and hear it.
+     */
+    "POST /api/sounds/library": async (req) => {
+      const library = requireLibrary();
+      const body = await readJson<{ id?: string; name?: string; upload?: boolean }>(req);
       const input = stagedPath(body.id);
       await assertStaged(input);
-      const name = (body.name ?? "").trim();
-      if (!name) throw new HttpError(400, "Give the sound a name.");
 
-      const existing = await priv.ringtones();
-      if (existing.length >= MAX_RINGTONES) {
-        throw new HttpError(
-          409,
-          `The doorbell holds ${MAX_RINGTONES} ring sounds and has ${existing.length}. Delete one first.`,
-        );
+      const bytes = new Uint8Array(await readFile(input));
+      const { sound, duplicate } = await asBadRequest(() => library.add(bytes, body.name ?? ""));
+
+      let onDoorbell: { ringtoneId: string; evicted: string[] } | null = null;
+      if (body.upload) {
+        if (!deps.ringtones) throw new HttpError(503, "Ring sounds need admin credentials.");
+        onDoorbell = await asBadRequest(() => deps.ringtones!.ensure(sound.hash));
       }
-      return priv.uploadRingtone(new Uint8Array(await readFile(input)), name);
+      return { ...sound, ref: libraryRef(sound.hash), duplicate, onDoorbell };
+    },
+
+    /** Put a library sound on the controller now, making room if it must. */
+    "POST /api/sounds/library/upload": async (_req, url) => {
+      if (!deps.ringtones) throw new HttpError(503, "Ring sounds need admin credentials.");
+      const hash = url.searchParams.get("hash") ?? "";
+      if (!(await library_()).some((l) => l.hash === hash)) {
+        throw new HttpError(404, "That sound is not in the library.");
+      }
+      return asBadRequest(() => deps.ringtones!.ensure(hash));
+    },
+
+    /**
+     * Delete a library sound, and its copy on the controller where that is
+     * safe. Refused while a theme or the default names it, the same as a
+     * GIF a theme uses.
+     */
+    "DELETE /api/sounds/library": async (_req, url) => {
+      const library = requireLibrary();
+      const hash = url.searchParams.get("hash") ?? "";
+      const ref = libraryRef(hash);
+      const using = store.themes().filter((t) => t.sound === ref);
+      if (using.length > 0) {
+        throw new HttpError(409, `Still used by ${using.map((t) => t.name).join(", ")}.`);
+      }
+      if (deps.defaultSound?.() === ref) {
+        throw new HttpError(409, "It is the default ring sound. Choose another default first.");
+      }
+      // Off the controller first: if that fails the file is still here, and
+      // a sound on the controller with no file behind it could never be
+      // removed again by Doorman.
+      const released = (await deps.ringtones?.release(hash)) ?? "absent";
+      const removed = await library.remove(hash);
+      if (!removed) throw new HttpError(404, "That sound is not in the library.");
+      return { removed: removed.name, fromDoorbell: released };
     },
 
     /**
@@ -767,32 +864,47 @@ export function createApi(deps: ApiDeps) {
       return { relinked };
     },
 
+    /**
+     * Everything the Sounds tab and the sound pickers need: what is on the
+     * controller, and what is in the library.
+     *
+     * "In use" means a theme or the default names it. For a library sound
+     * that is by reference; for a ringtone it is by id, or by being the
+     * controller's copy of a library sound that is in use.
+     */
     "GET /api/ringtones": async () => {
       if (!priv) throw new HttpError(503, "Ring sounds need admin credentials.");
       const tones = await priv.ringtones();
-      const used = new Set(store.themes().map((t) => t.sound).filter(Boolean));
+      deps.ringtones?.reconcile(tones);
+
+      const refs = new Set(store.themes().map((t) => t.sound).filter(Boolean));
+      const fallback = deps.defaultSound?.();
+      if (fallback) refs.add(fallback);
+
+      const manifest = new Map(store.ringtoneRecords().map((r) => [r.ringtoneId, r.hash]));
+      const library = await library_();
+
       return {
         limit: MAX_RINGTONES,
-        ringtones: tones.map((t) => ({ ...t, inUse: used.has(t.id) })),
+        ringtones: tones.map((t) => {
+          const hash = manifest.get(t.id);
+          return {
+            ...t,
+            // Doorman uploaded it and has the file, so it may remove it to
+            // make room and put it back later.
+            managed: hash !== undefined,
+            inUse: refs.has(t.id) || (hash !== undefined && refs.has(libraryRef(hash))),
+          };
+        }),
+        library: library.map((l) => ({
+          ref: libraryRef(l.hash),
+          hash: l.hash,
+          name: l.name,
+          bytes: l.bytes,
+          onDoorbell: store.ringtoneFor(l.hash) !== null,
+          inUse: refs.has(libraryRef(l.hash)),
+        })),
       };
-    },
-
-    "POST /api/ringtones": async (req) => {
-      if (!priv) throw new HttpError(503, "Ring sounds need admin credentials.");
-      const existing = await priv.ringtones();
-      // Unlike animations, ringtones are capped - and the cap is the reason
-      // themes reference them by id rather than by content hash.
-      if (existing.length >= MAX_RINGTONES) {
-        throw new HttpError(
-          409,
-          `The doorbell holds ${MAX_RINGTONES} ring sounds and has ${existing.length}. Delete one first.`,
-        );
-      }
-      const { name, bytes } = await readUpload(req);
-      if (!AUDIO_EXTENSIONS.has(extname(name).toLowerCase())) {
-        throw new HttpError(400, "Ring sounds must be an audio file.");
-      }
-      return priv.uploadRingtone(bytes, basename(name, extname(name)));
     },
 
     "DELETE /api/ringtones": async (_req, url) => {
@@ -1134,5 +1246,19 @@ export function createApi(deps: ApiDeps) {
     res.end(bytes);
   }
 
-  return { routes, serveMedia, serveThumbnail, serveStaged };
+  /** A library sound, for listening to on the Sounds tab. */
+  async function serveLibrarySound(hash: string, res: ServerResponse): Promise<void> {
+    const found = deps.soundLibrary ? await deps.soundLibrary.read(hash) : null;
+    if (!found) throw new HttpError(404, "That sound is not in the library.");
+    res.writeHead(200, {
+      "Content-Type": "audio/mpeg",
+      "Content-Length": found.bytes.byteLength,
+      // Addressed by content hash, so these bytes never change under it.
+      "Cache-Control": "private, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.end(found.bytes);
+  }
+
+  return { routes, serveMedia, serveThumbnail, serveStaged, serveLibrarySound };
 }

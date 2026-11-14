@@ -277,10 +277,63 @@ describe("importing", () => {
     }
   });
 
-  it("will not send a sound anywhere without admin credentials", async () => {
-    await assert.rejects(
-      () => post("POST /api/ringtones/keep", { id: "00000000-0000-4000-8000-000000000000.mp3", name: "x" }),
-      /admin credentials/,
-    );
+  it("keeps a sound in the library even with no way to reach the controller", async () => {
+    // The library never fails because the doorbell is full - or absent.
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { Staging } = await import("../src/media/staging.ts");
+    const { SoundLibrary } = await import("../src/media/soundlib.ts");
+
+    const root = await mkdtemp(join(tmpdir(), "doorman-lib-"));
+    try {
+      const staging = new Staging(join(root, "staging"));
+      const library = new SoundLibrary(join(root, "sounds"));
+      const local = createApi({
+        store,
+        source,
+        imageDeviceFor: () => new FakeDevice(),
+        soundDeviceFor: () => undefined,
+        protect: { displayCapableCameras: async () => [] } as never,
+        mediaDir: "media",
+        cacheDir: join(root, "thumbs"),
+        stagingDir: staging.dir,
+        soundLibrary: library,
+        protectVersion: "7.2.105",
+      } as never);
+      const call = (route: string, body: unknown, path = route.split(" ")[1]!) =>
+        local.routes[route](withJson(body), url(path));
+
+      const id = await staging.put(new Uint8Array(Buffer.from("ID3-elf")), "mp3");
+      const kept = (await call("POST /api/sounds/library", { id, name: "Elf: Santa!" })) as {
+        ref: string; name: string; hash: string;
+      };
+      assert.equal(kept.name, "Elf Santa!", "characters a filesystem minds are dropped");
+      assert.equal(kept.ref, `library:${kept.hash}`);
+
+      // Asking for it on the doorbell too is where credentials matter.
+      const again = await staging.put(new Uint8Array(Buffer.from("ID3-other")), "mp3");
+      await assert.rejects(
+        () => call("POST /api/sounds/library", { id: again, name: "other", upload: true }),
+        /admin credentials/,
+      );
+
+      // In use by a theme: not deletable, like a GIF a theme shows.
+      store.upsertTheme({
+        id: "xmas", name: "Christmas", image: "hash-xmas", sound: kept.ref,
+        priority: 0, enabled: true, rules: [{}], devices: [],
+      });
+      await assert.rejects(
+        () => call("DELETE /api/sounds/library", {}, `/api/sounds/library?hash=${kept.hash}`),
+        /Still used by Christmas/,
+      );
+      store.deleteTheme("xmas");
+      const removed = (await call("DELETE /api/sounds/library", {}, `/api/sounds/library?hash=${kept.hash}`)) as {
+        removed: string;
+      };
+      assert.equal(removed.removed, "Elf Santa!");
+    } finally {
+      await rm(root, { recursive: true });
+    }
   });
 });

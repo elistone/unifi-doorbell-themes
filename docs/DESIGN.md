@@ -89,6 +89,19 @@ plainly because it is counter-intuitive:
 | Delete | private API | private API |
 | Strategy | upload once, keep forever | upload once, **evict when full** |
 
+From 0.8.0 that last cell is what happens. Sounds live in a library on disk
+(`media/sounds/`), and the controller's slots are a cache over it: uploaded
+when a theme needs one, least recently used removed when full. The earlier
+choice - pick sounds only from what the controller already holds, to avoid
+upload churn on an undocumented endpoint - left nothing able to help once
+the slots filled, and Protect refused new sounds with an empty-bodied 400.
+The churn turned out to be bounded by the schedule anyway: an upload only
+happens when today's sound is not already there.
+
+The cap Protect actually enforces may be lower than 12 - the 400 came back
+with fewer than 12 ringtones present - so a 400 on upload removes one more
+of Doorman's own sounds and retries, once.
+
 ## Settled decisions
 
 | Decision | Choice |

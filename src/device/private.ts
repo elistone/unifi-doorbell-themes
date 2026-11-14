@@ -42,6 +42,21 @@ export interface SpeakerSettings {
  */
 export const MAX_RINGTONES = 12;
 
+/**
+ * A refusal from the controller, with its status kept as a number.
+ *
+ * The ring sound cache needs to tell "Protect said no" (a 400 - which is
+ * how a full set of slots answers) from "the network fell over", because it
+ * deletes a sound to retry the first and must never do that for the second.
+ */
+export class ProtectError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 export class PrivateApi {
   readonly #host: string;
   readonly #username: string;
@@ -109,7 +124,8 @@ export class PrivateApi {
       return this.#request(path, init, false);
     }
     if (!response.ok) {
-      throw new Error(
+      throw new ProtectError(
+        response.status,
         `${init.method ?? "GET"} ${path} failed with ${response.status}: ` +
           `${(await response.text().catch(() => "")).slice(0, 200)}`,
       );

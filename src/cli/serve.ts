@@ -14,6 +14,8 @@ import { DirectoryAssetSource, ProtectImageDevice, ProtectSoundDevice } from "..
 import { PrivateApi } from "../device/private.ts";
 import { Protect } from "../device/protect.ts";
 import { FreesoundSearch, GiphySearch } from "../media/search.ts";
+import { SoundLibrary } from "../media/soundlib.ts";
+import { createRingtoneCache } from "../ringtones.ts";
 import { HttpNotifier } from "../notify.ts";
 import { Store } from "../store/db.ts";
 import { VERSION } from "../version.ts";
@@ -45,7 +47,10 @@ const defaultRingtone = () =>
 const protect = new Protect({ host, apiKey, insecureTls: process.env.PROTECT_INSECURE_TLS !== "false" });
 const dbPath = process.env.DOORMAN_DB ?? "data/doorman.sqlite";
 const store = new Store(dbPath);
-const source = new DirectoryAssetSource(process.env.DOORMAN_MEDIA ?? "media", protect);
+const mediaDir = process.env.DOORMAN_MEDIA ?? "media";
+const source = new DirectoryAssetSource(mediaDir, protect);
+// Inside the media library, so whatever backs up the GIFs backs these up.
+const soundLibrary = new SoundLibrary(join(mediaDir, "sounds"));
 
 const adminUser = process.env.PROTECT_ADMIN_USER;
 const adminPass = process.env.PROTECT_ADMIN_PASS;
@@ -96,6 +101,24 @@ function activeDevices() {
 const imageDeviceFor = (id: string) => new ProtectImageDevice(protect, id);
 const soundDeviceFor = (id: string) =>
   priv ? new ProtectSoundDevice(priv, id) : undefined;
+
+/**
+ * The controller's ring sound slots as a cache over the library. What any
+ * doorbell is playing - enabled or not, since a disabled one still rings -
+ * and the default sound are never removed to make room.
+ */
+const ringtones = priv
+  ? createRingtoneCache({
+      store,
+      host: priv,
+      files: soundLibrary,
+      playing: () =>
+        Promise.all(
+          store.devices().map((d) => soundDeviceFor(d.id)?.currentRingtone().catch(() => null) ?? null),
+        ),
+      defaultSound: defaultRingtone,
+    })
+  : undefined;
 
 if (store.userCount() === 0) {
   log("no account yet - open the UI to create one; until then it is unconfigured");
@@ -153,6 +176,7 @@ async function tick(): Promise<void> {
           defaultSound: defaultRingtone(),
           deviceId: target.id,
           deviceName: target.name,
+          ringtones,
         },
         notifier,
         soundDeviceFor(target.id),
@@ -206,7 +230,9 @@ const handle = createHandler({
   // is running.
   imageDeviceFor,
   soundDeviceFor,
-  mediaDir: process.env.DOORMAN_MEDIA ?? "media",
+  mediaDir,
+  soundLibrary,
+  ringtones,
   // Beside the database rather than in the media library: these are
   // derived files, and the media directory is the one thing here that
   // cannot be regenerated.

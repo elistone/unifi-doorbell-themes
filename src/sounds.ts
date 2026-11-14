@@ -14,6 +14,28 @@ import type { Ringtone } from "./device/private.ts";
 import type { Store } from "./store/db.ts";
 import type { Theme } from "./domain/types.ts";
 
+/**
+ * A theme's sound is one string, and it is one of two things:
+ *
+ *   - a ringtone id, for a sound that lives only on the controller - the
+ *     stock ones, and anything uploaded through Protect or before 0.8.0
+ *   - `library:<hash>`, for a sound Doorman keeps on disk and uploads to
+ *     the controller when a theme needs it
+ *
+ * Ringtone ids are 24 hex characters, so the prefix cannot collide with
+ * one. One string rather than two fields, so the default-sound setting, the
+ * pickers and the theme table all carry either kind without each growing a
+ * second column.
+ */
+const LIBRARY_PREFIX = "library:";
+
+export const libraryRef = (hash: string): string => `${LIBRARY_PREFIX}${hash}`;
+
+export const isLibraryRef = (ref: string | undefined | null): ref is string =>
+  typeof ref === "string" && ref.startsWith(LIBRARY_PREFIX);
+
+export const libraryHash = (ref: string): string => ref.slice(LIBRARY_PREFIX.length);
+
 export interface SoundStatus {
   theme: Theme;
   /** What it is pointing at now, if that still exists. */
@@ -30,7 +52,9 @@ export function soundStatus(themes: Theme[], ringtones: Ringtone[]): SoundStatus
   const byName = new Map(ringtones.map((r) => [key(r.name), r]));
 
   return themes
-    .filter((t) => t.sound)
+    // A library sound has no ringtone id to go stale - if it is not on the
+    // controller it is uploaded when needed - so it is never "broken".
+    .filter((t) => t.sound && !isLibraryRef(t.sound))
     .map((theme) => ({
       theme,
       current: byId.get(theme.sound!) ?? null,

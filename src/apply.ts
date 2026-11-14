@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { decide } from "./domain/decide.ts";
 import type { Config } from "./domain/types.ts";
 import type { Outcome, Store } from "./store/db.ts";
+import { isLibraryRef, libraryHash } from "./sounds.ts";
 
 /**
  * The one callable operation.
@@ -52,6 +53,15 @@ export interface AssetSource {
   listRemote(): Promise<Array<{ name: string; originalName: string }>>;
   /** Local media, as content hash -> filename. */
   localFiles(): Promise<Map<string, string>>;
+}
+
+/**
+ * Turns a library sound into a ringtone id, uploading it if the controller
+ * does not have it. The RingtoneCache, behind a port so apply can be tested
+ * without one.
+ */
+export interface RingtoneResolver {
+  ensure(hash: string): Promise<{ ringtoneId: string; uploaded: boolean; evicted: string[] }>;
 }
 
 export interface Notifier {
@@ -108,6 +118,13 @@ export interface ApplyOptions {
   deviceId?: string;
   /** Its human name, for log lines and the audit trail. */
   deviceName?: string;
+
+  /**
+   * For themes whose sound is in Doorman's own library rather than only on
+   * the controller. Without it such a sound is skipped, like having no
+   * sound device at all.
+   */
+  ringtones?: RingtoneResolver;
 }
 
 /**
@@ -127,17 +144,38 @@ export interface ApplyOptions {
 async function setSound(
   sound: SoundDevice | undefined,
   wanted: string | undefined,
-): Promise<ApplyResult["sound"]> {
-  if (!wanted) return undefined;
-  if (!sound) return "skipped";
+  ringtones: RingtoneResolver | undefined,
+): Promise<{ outcome: ApplyResult["sound"]; note?: string }> {
+  if (!wanted) return { outcome: undefined };
+  if (!sound) return { outcome: "skipped" };
   try {
-    if ((await sound.currentRingtone()) === wanted) return "unchanged";
-    await sound.setRingtone(wanted);
-    return "applied";
-  } catch {
-    return "failed";
+    // A library sound may not be on the controller yet - or may have been
+    // removed to make room for another - so it is uploaded here if needed.
+    // Inside the try, because that is the private API too, and its failing
+    // must cost the ringtone and never the image.
+    let ringtoneId = wanted;
+    let note: string | undefined;
+    if (isLibraryRef(wanted)) {
+      if (!ringtones) return { outcome: "skipped" };
+      const ensured = await ringtones.ensure(libraryHash(wanted));
+      ringtoneId = ensured.ringtoneId;
+      if (ensured.uploaded) {
+        note =
+          "ring sound uploaded" +
+          (ensured.evicted.length > 0 ? `, removing ${ensured.evicted.join(", ")} to make room` : "");
+      }
+    }
+
+    if ((await sound.currentRingtone()) === ringtoneId) return { outcome: "unchanged", note };
+    await sound.setRingtone(ringtoneId);
+    return { outcome: "applied", note };
+  } catch (error) {
+    return { outcome: "failed", note: error instanceof Error ? error.message : String(error) };
   }
 }
+
+/** The decision's reason, with whatever the sound half had to say appended. */
+const withNote = (reason: string, note?: string) => (note ? `${reason}; ${note}` : reason);
 
 export async function apply(
   store: Store,
@@ -154,7 +192,7 @@ export async function apply(
   // history.
   const deviceId = options.deviceId ?? "default";
   const deviceName = options.deviceName ?? null;
-  const { dryRun = false, skipUnchanged = true, defaultSound } = options;
+  const { dryRun = false, skipUnchanged = true, defaultSound, ringtones } = options;
   const at = now.toISOString();
 
   const finish = async (result: ApplyResult): Promise<ApplyResult> => {
@@ -242,14 +280,19 @@ export async function apply(
       // APIs and drift independently, and returning early on the image alone
       // left a Schitt's Creek picture paired with the Halloween chime with
       // nothing in the system able to notice or repair it.
-      const soundOutcome = dryRun ? undefined : await setSound(sound, wantedSound);
+      const { outcome: soundOutcome, note } = dryRun
+        ? { outcome: undefined, note: undefined }
+        : await setSound(sound, wantedSound, ringtones);
       const soundChanged = soundOutcome === "applied";
 
       return finish({
         outcome: soundChanged ? "applied" : "unchanged",
-        reason: soundChanged
-          ? `${decision.reason}; image already right, ringtone corrected`
-          : `${decision.reason}; already showing it`,
+        reason: withNote(
+          soundChanged
+            ? `${decision.reason}; image already right, ringtone corrected`
+            : `${decision.reason}; already showing it`,
+          note,
+        ),
         themeId: theme.id,
         themeName: theme.name,
         assetName,
@@ -274,14 +317,16 @@ export async function apply(
     store.setLastAppliedAsset(deviceId, assetName);
     store.setCursor(deviceId, decision.cursor);
 
-    const soundOutcome = await setSound(sound, wantedSound);
+    const { outcome: soundOutcome, note } = await setSound(sound, wantedSound, ringtones);
 
     return finish({
       outcome: "applied",
-      reason:
+      reason: withNote(
         soundOutcome === "failed"
           ? `${decision.reason}; image set, ringtone failed`
           : decision.reason,
+        note,
+      ),
       themeId: theme.id,
       themeName: theme.name,
       assetName,

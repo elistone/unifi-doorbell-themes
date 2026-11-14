@@ -146,9 +146,9 @@
       <div>
         <h2>Ring sounds</h2>
         <p class="sub" style="margin:0">
-          What the doorbell's own speaker plays to the visitor.
-          <strong>The doorbell holds 12</strong>, so these are referenced by id
-          rather than kept forever like images.
+          What the doorbell's own speaker plays to the visitor. Doorman keeps
+          its own library, and puts each sound on the doorbell when a theme
+          needs it - the doorbell itself only has room for a dozen.
         </p>
       </div>
       <div class="spacer"></div>
@@ -405,8 +405,12 @@
         <div class="facts" id="sound-result-facts"></div>
       </div>
       <label class="field" style="margin-top:14px">
-        <span>Name on the doorbell</span>
+        <span>Name</span>
         <input type="text" id="sound-name" maxlength="60">
+      </label>
+      <label class="field">
+        <span><input type="checkbox" id="sound-upload-now"> Put it on the doorbell now
+          <span class="hint">— otherwise it goes on when a theme needs it</span></span>
       </label>
     </div>
   </div>
@@ -414,7 +418,7 @@
     <button type="button" class="btn" id="sound-back" hidden>Back</button>
     <div class="spacer"></div>
     <button type="button" class="btn" id="sound-close">Close</button>
-    <button type="button" class="btn primary" id="sound-keep" hidden>Add to doorbell</button>
+    <button type="button" class="btn primary" id="sound-keep" hidden>Add to library</button>
   </div>
 </dialog>
 

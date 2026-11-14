@@ -439,13 +439,7 @@ async function renderSettings() {
   }).join("");
 
   $("#default-ringtone").innerHTML =
-    `<option value="">None — leave whatever is set</option>` +
-    sounds.ringtones
-      .map(
-        (r) =>
-          `<option value="${esc(r.id)}" ${r.id === settings.defaultRingtone.value ? "selected" : ""}>${esc(r.name)}</option>`,
-      )
-      .join("");
+    `<option value="">None — leave whatever is set</option>` + soundOptions(settings.defaultRingtone.value);
 
   // Worth saying out loud: a value coming from the environment is one the
   // deployment chose, and editing it here takes it over for good.
@@ -745,11 +739,7 @@ function openTheme(theme) {
     })
     .join("");
 
-  $("#f-sound").innerHTML =
-    `<option value="">Default ring sound</option>` +
-    sounds.ringtones
-      .map((r) => `<option value="${esc(r.id)}" ${r.id === theme?.sound ? "selected" : ""}>${esc(r.name)}</option>`)
-      .join("");
+  $("#f-sound").innerHTML = `<option value="">Default ring sound</option>` + soundOptions(theme?.sound);
 
   // Only worth showing with more than one doorbell; with one it is noise
   // and the empty default already means "that one".
@@ -945,6 +935,28 @@ $("#upload-gif").addEventListener("change", async (event) => {
 
 // ------------------------------------------------------------------ sounds
 
+/**
+ * Every sound a theme or the default can name, for a <select>.
+ *
+ * Library sounds first: they are the ones that can always be put on the
+ * doorbell. The controller group leaves out Doorman's own uploads, which
+ * are the library sounds again - choosing one there by its ringtone id
+ * would tie the theme to a copy the cache is allowed to remove.
+ */
+function soundOptions(selected) {
+  const option = (value, label) =>
+    `<option value="${esc(value)}" ${value === selected ? "selected" : ""}>${esc(label)}</option>`;
+  const library = (sounds.library ?? []).map((l) => option(l.ref, l.name)).join("");
+  const onDoorbell = sounds.ringtones
+    .filter((r) => !r.managed)
+    .map((r) => option(r.id, r.isDefault ? `${r.name} (stock)` : r.name))
+    .join("");
+  return (
+    (library ? `<optgroup label="Library">${library}</optgroup>` : "") +
+    (onDoorbell ? `<optgroup label="Only on the doorbell">${onDoorbell}</optgroup>` : "")
+  );
+}
+
 async function loadSounds() {
   try {
     sounds = await api("/api/ringtones");
@@ -975,7 +987,9 @@ async function renderSounds() {
     .map(
       (r) => `
       <tr>
-        <td><strong>${esc(r.name)}</strong> ${r.isDefault ? `<span class="badge mute">stock</span>` : ""}</td>
+        <td><strong>${esc(r.name)}</strong>
+          ${r.isDefault ? `<span class="badge mute">stock</span>` : ""}
+          ${r.managed ? `<span class="badge mute" title="Doorman may remove this to make room, and put it back when a theme needs it">from the library</span>` : ""}</td>
         <td class="mono">${esc(r.id)}</td>
         <td>${r.inUse ? `<span class="badge ok">in use</span>` : ""}</td>
         <td style="text-align:right">
@@ -996,6 +1010,27 @@ async function renderSounds() {
   const repairable = broken.filter((b) => b.canRelinkTo).length;
 
   const full = sounds.ringtones.length >= sounds.limit;
+  const canMakeRoom = sounds.ringtones.some((r) => r.managed && !r.inUse);
+
+  const libraryRows = (sounds.library ?? [])
+    .map(
+      (l) => `
+      <tr>
+        <td><strong>${esc(l.name)}</strong></td>
+        <td>${
+          l.onDoorbell
+            ? `<span class="badge ok">on the doorbell</span>`
+            : `<span class="badge mute" title="Uploaded automatically when a theme needs it">uploaded when needed</span>`
+        } ${l.inUse ? `<span class="badge ok">in use</span>` : ""}</td>
+        <td style="color:var(--text-dim)">${kb(l.bytes)}</td>
+        <td style="text-align:right; white-space:nowrap">
+          <button class="btn small" data-listen-lib="${esc(l.hash)}" aria-label="Listen to ${esc(l.name)}">${icon("play")}</button>
+          ${l.onDoorbell ? "" : `<button class="btn small" data-upload-lib="${esc(l.hash)}" title="Put it on the doorbell now, making room if needed">${icon("upload")}Put on doorbell</button>`}
+          <button class="btn small danger" data-del-lib="${esc(l.hash)}" data-name="${esc(l.name)}" ${l.inUse ? "disabled title='Used by a theme or the default'" : ""}>${icon("trash")}Delete</button>
+        </td>
+      </tr>`,
+    )
+    .join("");
   $("#sounds-list").innerHTML = `
     ${
       broken.length === 0
@@ -1018,14 +1053,82 @@ async function renderSounds() {
              }
            </div>`
     }
+    <h3>Library</h3>
+    <p class="sub">
+      Kept by Doorman. A theme can use any of these, however many there are -
+      each is put on the doorbell when a theme needs it.
+    </p>
+    ${
+      libraryRows
+        ? `<table><thead><tr><th>Name</th><th></th><th>Size</th><th></th></tr></thead><tbody>${libraryRows}</tbody></table>`
+        : `<p class="sub"><em>Empty. Use Find a sound or Upload sound to add one.</em></p>`
+    }
+
+    <h3 style="margin-top:24px">On the doorbell</h3>
     <p class="sub">
       ${sounds.ringtones.length} of ${sounds.limit} slots used.
-      ${full ? `<strong style="color:var(--bad)">Full — delete one before uploading.</strong>` : ""}
+      ${
+        full
+          ? canMakeRoom
+            ? "Full, but Doorman will remove one of its library sounds to make room when it needs to."
+            : `<strong style="color:var(--bad)">Full, and nothing here is one Doorman can remove — delete one so library sounds can be put on.</strong>`
+          : ""
+      }
     </p>
     <table>
       <thead><tr><th>Name</th><th>Id</th><th></th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+
+  // One player for the whole tab, shared with the import dialog's.
+  $$("[data-listen-lib]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const same = listening === b;
+      stopListening();
+      if (same) return;
+      listener.src = `/library-sound/${encodeURIComponent(b.dataset.listenLib)}`;
+      listener.play().catch((error) => toast(error.message, "bad"));
+      listening = b;
+      b.innerHTML = icon("stop");
+    }),
+  );
+
+  $$("[data-upload-lib]").forEach((b) =>
+    b.addEventListener("click", (e) =>
+      withBusy(e.currentTarget, async () => {
+        const result = await api(`/api/sounds/library/upload?hash=${encodeURIComponent(b.dataset.uploadLib)}`, {
+          method: "POST",
+        });
+        toast(
+          result.evicted.length > 0
+            ? `On the doorbell. Removed ${result.evicted.join(", ")} to make room - it is still in the library.`
+            : "On the doorbell.",
+          "ok",
+        );
+        await renderSounds();
+      }),
+    ),
+  );
+
+  $$("[data-del-lib]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!confirm(`Delete "${b.dataset.name}" from the library? It is removed from the doorbell too.`)) return;
+      try {
+        const result = await api(`/api/sounds/library?hash=${encodeURIComponent(b.dataset.delLib)}`, {
+          method: "DELETE",
+        });
+        toast(
+          result.fromDoorbell === "kept"
+            ? `Deleted. It is still on the doorbell because a doorbell is playing it.`
+            : "Deleted.",
+          "ok",
+        );
+        await renderSounds();
+      } catch (error) {
+        toast(error.message, "bad");
+      }
+    }),
+  );
 
   $("#relink-sounds")?.addEventListener("click", (e) =>
     withBusy(e.target, async () => {
@@ -1054,15 +1157,19 @@ async function renderSounds() {
   );
 }
 
+// An uploaded file goes through the same trim editor as a found one, and
+// into the library, rather than straight onto the doorbell.
 $("#upload-sound").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
   const form = new FormData();
   form.append("file", file);
   try {
-    const result = await api("/api/ringtones", { method: "POST", body: form });
-    toast(`Uploaded ${result.name}.`, "ok");
-    await renderSounds();
+    const staged = await api("/api/staging/upload?kind=audio", { method: "POST", body: form });
+    showStagedSound(staged, file.name);
+    soundView("edit");
+    $("#sound-back").hidden = true; // nothing was searched, so nothing to go back to
+    $("#sound-dialog").showModal();
   } catch (error) {
     toast(error.message, "bad");
   } finally {
@@ -1440,7 +1547,11 @@ $("#sound-link-form").addEventListener("submit", (event) => {
 });
 
 async function stageSound(request, suggestedName) {
-  const staged = await postJson("/api/staging", { ...request, kind: "audio" });
+  showStagedSound(await postJson("/api/staging", { ...request, kind: "audio" }), suggestedName);
+  soundView("edit");
+}
+
+function showStagedSound(staged, suggestedName) {
   sound.staged = staged;
   sound.rendered = null;
 
@@ -1454,7 +1565,6 @@ async function stageSound(request, suggestedName) {
     .slice(0, 60);
   $("#sound-result").hidden = true;
   updateSoundLength();
-  soundView("edit");
 }
 
 function invalidateSound() {
@@ -1516,8 +1626,18 @@ $("#sound-keep").addEventListener("click", (e) =>
     const name = $("#sound-name").value.trim();
     if (!name) throw new Error("Give the sound a name.");
     const rendered = sound.rendered ?? (await renderSoundPreview());
-    const result = await postJson("/api/ringtones/keep", { id: rendered.id, name });
-    toast(`Added ${result.name} to the doorbell.`, "ok");
+    const result = await postJson("/api/sounds/library", {
+      id: rendered.id,
+      name,
+      upload: $("#sound-upload-now").checked,
+    });
+    const evicted = result.onDoorbell?.evicted ?? [];
+    toast(
+      (result.duplicate ? `Already in the library as ${result.name}.` : `Added ${result.name} to the library.`) +
+        (result.onDoorbell ? " It is on the doorbell now." : "") +
+        (evicted.length > 0 ? ` Removed ${evicted.join(", ")} to make room - still in the library.` : ""),
+      "ok",
+    );
     $("#sound-dialog").close();
     await renderSounds();
   }),

@@ -123,3 +123,13 @@ describe("re-linking after a migration", () => {
     assert.equal(byId.get("d")!.sound, undefined);
   });
 });
+
+describe("library sounds and re-linking", () => {
+  it("never calls a library sound broken - it is uploaded when needed, not looked up", () => {
+    const theme: Theme = {
+      id: "xmas", name: "Christmas", image: "h", sound: "library:abc", soundName: "Elf",
+      priority: 0, enabled: true, rules: [{}], devices: [],
+    };
+    assert.deepEqual(soundStatus([theme], []), []);
+  });
+});

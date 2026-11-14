@@ -119,8 +119,9 @@ any library tile opens the same editor and writes a new copy.
 which is Creative Commons audio — each result shows its licence, and a
 CC BY sound asks you to credit its author. Or paste a link to an audio
 file. Trim it (play it, pause where it should start, press **Here**),
-preview, and it goes onto the doorbell as a real MP3 with its volume
-evened out to match the others.
+preview, and it is kept in the **sound library** as a real MP3 with its
+volume evened out to match the others. **Upload sound** goes through the
+same editor.
 
 Both searches need a free API key and are simply not offered without one;
 pasting a link works regardless.
@@ -347,9 +348,18 @@ and it is the half likely to break when Ubiquiti ships a major Protect
 release. Images stay on the official API precisely so that only half the app
 is exposed to that.
 
-One asymmetry worth knowing: **images are uncapped, sounds are limited to 12**
-on the controller. So the image library can grow freely, and the sound library
-needs evicting when it fills.
+One asymmetry worth knowing: **images are uncapped, sounds are limited to
+about a dozen** on the controller. So Doorman keeps its own sound library in
+`media/sounds/` — backed up along with the GIFs — and treats the controller's
+slots as a cache. A theme's sound is uploaded when the theme needs it, and if
+the slots are full, the least recently used sound *Doorman put there* is
+removed to make room. It can always come back; the file is in the library.
+
+It never removes a stock sound, one you added through Protect (there is no
+copy of it anywhere else), the sound any doorbell is playing, or the default.
+If everything on the controller is one of those, it says so and you choose
+what to delete. A Protect migration, which loses every ringtone at once, is
+repaired the same way: the next apply uploads what each theme needs.
 
 ## How it decides
 
@@ -420,7 +430,7 @@ strips the TypeScript itself, and does so without a flag only from 23.6. The
 container ships 24.
 
 ```bash
-npm test              # 193 tests
+npm test              # 216 tests
 npm run check         # tests + the import check below
 ```
 

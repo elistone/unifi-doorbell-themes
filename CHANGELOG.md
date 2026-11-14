@@ -5,6 +5,36 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **A sound library.** Ring sounds are kept by Doorman in `media/sounds/`,
+  so there can be as many as you like, and the doorbell's dozen slots
+  become a cache: a theme's sound is uploaded when the theme needs it, and
+  when the slots are full the least recently used sound Doorman put there
+  is removed first. Stock sounds, ones added through Protect, whatever a
+  doorbell is playing and the default are never removed.
+- Imported and uploaded sounds go into the library through the trim editor,
+  with an option to put them on the doorbell straight away. The Sounds tab
+  lists the library with listen, put-on-doorbell and delete.
+- Sound pickers offer library sounds first, then what is only on the
+  doorbell.
+- The history says when a sound was uploaded and what was removed to make
+  room.
+
+### Fixed
+
+- **Adding a sound failed with a bare 500** when the controller was full -
+  Protect answers with an empty 400, and its real limit can be below the
+  12 Doorman counted. A 400 now makes room and retries once, and when
+  nothing can be removed the error says what to do.
+
+### Changed
+
+- **Upload sound** opens the trim editor and adds to the library, rather
+  than sending the file straight to the controller.
+- Themes using sounds already on the controller are unchanged; those sounds
+  are listed as "only on the doorbell" and are never removed automatically.
+
 ## 0.7.1 - 2026-11-14
 
 ### Fixed

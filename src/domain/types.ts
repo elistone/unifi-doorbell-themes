@@ -58,18 +58,19 @@ export interface Theme {
   /** Content hash of the image. Resolved to an uploaded asset name elsewhere. */
   image: string;
   /**
-   * Ringtone id on the NVR, e.g. "6933fcd40050f903e46e1a88".
+   * The ring sound: either a ringtone id on the NVR, e.g.
+   * "6933fcd40050f903e46e1a88", or `library:<content hash>` for a sound in
+   * Doorman's own library. See `libraryRef` in sounds.ts.
    *
-   * An id rather than a content hash, which is the opposite of how `image`
-   * works, and the asymmetry is forced by the device: animations are
-   * uncapped so each one can be uploaded once and kept forever, but
-   * ringtones are capped at 12. A local sound library larger than that
-   * would mean uploading and evicting on every rotation - churn against an
-   * undocumented endpoint, to save a few hundred KB on a terabyte NVR.
+   * Until 0.8.0 it could only be an id. Ringtones are capped, so a library
+   * larger than the controller was rejected as "uploading and evicting on
+   * every rotation". That kept the controller as the only library - and when
+   * its slots filled, a new sound was refused with an empty 400 and nothing
+   * could help. Treating the slots as a cache costs at most one upload when
+   * a theme's sound is not already there, which the schedule makes rare,
+   * and it survives a Protect migration for free. See ringtones.ts.
    *
-   * So sounds are chosen from what is already on the controller, and
-   * uploading a new one is a deliberate act rather than a side effect of
-   * scheduling. Omit it and the theme leaves the ring sound alone.
+   * Omit it and the theme falls back to the default sound.
    */
   sound?: string;
 

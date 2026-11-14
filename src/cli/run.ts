@@ -13,10 +13,13 @@
  * schedule, and wrote its state and history under a doorbell that does
  * not exist.
  */
+import { join } from "node:path";
 import { adopt, apply, reconcile } from "../apply.ts";
 import { DirectoryAssetSource, ProtectImageDevice, ProtectSoundDevice } from "../device/adapter.ts";
 import { PrivateApi } from "../device/private.ts";
 import { Protect } from "../device/protect.ts";
+import { SoundLibrary } from "../media/soundlib.ts";
+import { createRingtoneCache } from "../ringtones.ts";
 import { Store } from "../store/db.ts";
 
 const dryRun = process.argv.includes("--dry-run");
@@ -67,6 +70,22 @@ const priv =
   adminUser && adminPass
     ? new PrivateApi({ host, username: adminUser, password: adminPass })
     : undefined;
+
+// The same cache, and the same rules about what it may remove, as the daemon.
+const defaultSound = () =>
+  store.setting("defaultRingtone") ?? process.env.DOORMAN_DEFAULT_RINGTONE ?? undefined;
+const ringtones = priv
+  ? createRingtoneCache({
+      store,
+      host: priv,
+      files: new SoundLibrary(join(mediaDir, "sounds")),
+      playing: () =>
+        Promise.all(
+          store.devices().map((d) => new ProtectSoundDevice(priv, d.id).currentRingtone().catch(() => null)),
+        ),
+      defaultSound,
+    })
+  : undefined;
 
 /** The doorbells this invocation covers. */
 const targets = (() => {
@@ -123,9 +142,12 @@ for (const target of targets) {
     at,
     {
       dryRun,
-      defaultSound: store.setting("defaultRingtone") ?? process.env.DOORMAN_DEFAULT_RINGTONE,
+      defaultSound: defaultSound(),
       deviceId: target.id,
       deviceName: target.name,
+      // A dry run never reaches it - apply checks - so this is safe to pass
+      // either way.
+      ringtones,
     },
     undefined,
     priv ? new ProtectSoundDevice(priv, target.id) : undefined,

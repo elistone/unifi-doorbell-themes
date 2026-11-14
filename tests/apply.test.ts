@@ -510,3 +510,82 @@ describe("adopting what is already on the NVR", () => {
     assert.deepEqual(await adopt(store, source), []);
   });
 });
+
+describe("library sounds", () => {
+  /** Stands in for the RingtoneCache: hands out an id, and records each ask. */
+  class FakeRingtones {
+    asked: string[] = [];
+    evicted: string[] = [];
+    fail: Error | null = null;
+    async ensure(hash: string) {
+      this.asked.push(hash);
+      if (this.fail) throw this.fail;
+      return { ringtoneId: `tone-for-${hash}`, uploaded: true, evicted: this.evicted };
+    }
+  }
+
+  it("puts the sound on the controller, then plays it", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    const ringtones = new FakeRingtones();
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "library:elf" });
+
+    const result = await apply(store, device, source, now, { ringtones }, undefined, sound);
+    assert.deepEqual(ringtones.asked, ["elf"]);
+    assert.equal(sound.current, "tone-for-elf");
+    assert.equal(result.sound, "applied");
+  });
+
+  it("says what it removed to make room, in the reason that gets logged", async () => {
+    source.add("hash-a");
+    const ringtones = new FakeRingtones();
+    ringtones.evicted = ["Halloween organ"];
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "library:elf" });
+
+    const result = await apply(store, device, source, now, { ringtones }, undefined, new FakeSound());
+    assert.match(result.reason, /removing Halloween organ to make room/);
+  });
+
+  it("works as the default sound too", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    store.upsertTheme(theme("everyday", "hash-a"));
+
+    await apply(
+      store, device, source, now,
+      { defaultSound: "library:stitch", ringtones: new FakeRingtones() },
+      undefined, sound,
+    );
+    assert.equal(sound.current, "tone-for-stitch");
+  });
+
+  it("never uploads or evicts on a dry run", async () => {
+    source.add("hash-a");
+    const ringtones = new FakeRingtones();
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "library:elf" });
+    await apply(store, device, source, now, {}, undefined, new FakeSound()); // asset now known
+
+    await apply(store, device, source, now, { dryRun: true, ringtones }, undefined, new FakeSound());
+    assert.deepEqual(ringtones.asked, [], "a dry run must not touch the controller's slots");
+  });
+
+  it("still applies the image when the sound cannot be put on the controller", async () => {
+    source.add("hash-a");
+    const ringtones = new FakeRingtones();
+    ringtones.fail = new Error("slots are full");
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "library:elf" });
+
+    const result = await apply(store, device, source, now, { ringtones }, undefined, new FakeSound());
+    assert.equal(result.outcome, "applied");
+    assert.equal(device.showing, result.assetName);
+    assert.equal(result.sound, "failed");
+    assert.match(result.reason, /slots are full/, "the reason says why, not just that");
+  });
+
+  it("is skipped, not failed, when there is nothing to resolve it with", async () => {
+    source.add("hash-a");
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "library:elf" });
+    const result = await apply(store, device, source, now, {}, undefined, new FakeSound());
+    assert.equal(result.sound, "skipped");
+  });
+});
