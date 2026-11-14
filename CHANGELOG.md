@@ -5,6 +5,13 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Fixed
+
+- **Add to library and Add to doorbell could never be clicked.** Both
+  buttons were left disabled in the page from an earlier design where
+  Preview had to come first, and nothing ever enabled them. They now work
+  straight away, rendering the preview on the way if you skipped it.
+
 ## 0.7.0 - 2026-11-14
 
 ### Added
