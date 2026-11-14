@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.7.0 - 2026-11-14
+
 ### Added
 
 - **Find a GIF** without leaving the app: search Giphy, or paste a link to
