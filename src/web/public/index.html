@@ -133,6 +133,7 @@
         </p>
       </div>
       <div class="spacer"></div>
+      <button class="btn" id="find-gif"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>Find a GIF</button>
       <label class="btn primary" for="upload-gif"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10.8V2.4M4.6 5.8 8 2.4l3.4 3.4"/><path d="M2.6 10.6v2a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-2"/></svg>Upload GIF</label>
       <input type="file" id="upload-gif" accept="image/gif" hidden>
     </div>
@@ -151,6 +152,7 @@
         </p>
       </div>
       <div class="spacer"></div>
+      <button class="btn" id="find-sound"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>Find a sound</button>
       <label class="btn primary" for="upload-sound"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10.8V2.4M4.6 5.8 8 2.4l3.4 3.4"/><path d="M2.6 10.6v2a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-2"/></svg>Upload sound</label>
       <input type="file" id="upload-sound" accept="audio/*" hidden>
     </div>
@@ -287,6 +289,133 @@
       <button type="submit" class="btn primary">Save</button>
     </div>
   </form>
+</dialog>
+
+<!-- ------------------------------------------------------ GIF import -->
+<!-- Two views in one dialog: find something, then crop and trim it. One
+     dialog rather than two so Back keeps the search results. -->
+<dialog id="gif-dialog" class="wide">
+  <div class="head" id="gif-dialog-title">Find a GIF</div>
+  <div class="content">
+    <div id="gif-find">
+      <form class="search-row" id="gif-search-form">
+        <input type="search" id="gif-q" placeholder="Search Giphy — waving, hello, santa…" autocomplete="off">
+        <button type="submit" class="btn primary">Search</button>
+      </form>
+      <p class="sub" id="gif-search-off" hidden>
+        Searching needs a free Giphy key in <code>GIPHY_API_KEY</code>.
+        Pasting a link below works without one.
+      </p>
+      <div class="results" id="gif-results"></div>
+      <button type="button" class="btn small" id="gif-more" hidden>More results</button>
+      <form class="search-row" id="gif-link-form" style="margin-top:16px">
+        <input type="text" id="gif-link" placeholder="…or paste a link to a GIF, or a Giphy page" autocomplete="off">
+        <button type="submit" class="btn">Import</button>
+      </form>
+    </div>
+
+    <div id="gif-edit" hidden>
+      <div class="editor">
+        <div>
+          <div class="crop-stage" id="crop-stage">
+            <img id="crop-img" alt="" draggable="false">
+            <div class="crop-box" id="crop-box"><span class="crop-handle" id="crop-handle"></span></div>
+          </div>
+          <p class="sub" style="margin:8px 0 0">Drag the square to choose what shows. Drag its corner to zoom.</p>
+        </div>
+        <div>
+          <label class="field">
+            <span>Start <span class="hint" id="gif-start-label"></span></span>
+            <input type="range" id="gif-start" min="0" step="0.05">
+          </label>
+          <label class="field">
+            <span>End <span class="hint" id="gif-end-label"></span></span>
+            <input type="range" id="gif-end" min="0" step="0.05">
+          </label>
+          <p class="sub" id="gif-estimate"></p>
+          <button type="button" class="btn" id="gif-preview">Preview</button>
+          <div class="result" id="gif-result" hidden>
+            <img id="gif-result-img" alt="Preview of the result">
+            <div class="facts" id="gif-result-facts"></div>
+          </div>
+          <label class="field" style="margin-top:14px">
+            <span>Save as</span>
+            <input type="text" id="gif-name" placeholder="hello.gif">
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <button type="button" class="btn" id="gif-back" hidden>Back</button>
+    <div class="spacer"></div>
+    <button type="button" class="btn" id="gif-close">Close</button>
+    <button type="button" class="btn primary" id="gif-keep" hidden disabled>Add to library</button>
+  </div>
+</dialog>
+
+<!-- ---------------------------------------------------- sound import -->
+<dialog id="sound-dialog" class="wide">
+  <div class="head" id="sound-dialog-title">Find a sound</div>
+  <div class="content">
+    <div id="sound-find">
+      <form class="search-row" id="sound-search-form">
+        <input type="search" id="sound-q" placeholder="Search Freesound — doorbell, fanfare, ho ho ho…" autocomplete="off">
+        <button type="submit" class="btn primary">Search</button>
+      </form>
+      <p class="sub" id="sound-search-off" hidden>
+        Searching needs a free Freesound key in <code>FREESOUND_API_KEY</code>.
+        Pasting a link below works without one.
+      </p>
+      <div id="sound-results"></div>
+      <button type="button" class="btn small" id="sound-more" hidden>More results</button>
+      <form class="search-row" id="sound-link-form" style="margin-top:16px">
+        <input type="text" id="sound-link" placeholder="…or paste a link to an audio file" autocomplete="off">
+        <button type="submit" class="btn">Import</button>
+      </form>
+      <p class="sub" id="sound-video-hint" style="margin-top:6px"></p>
+    </div>
+
+    <div id="sound-edit" hidden>
+      <audio id="sound-source" controls preload="auto" style="width:100%"></audio>
+      <div class="trim-row">
+        <label class="field">
+          <span>Start <span class="hint">seconds</span></span>
+          <div class="search-row">
+            <input type="number" id="sound-start" min="0" step="0.1" value="0">
+            <button type="button" class="btn small" id="sound-mark-start" title="Use the current playback position">Here</button>
+          </div>
+        </label>
+        <label class="field">
+          <span>End <span class="hint">seconds</span></span>
+          <div class="search-row">
+            <input type="number" id="sound-end" min="0" step="0.1">
+            <button type="button" class="btn small" id="sound-mark-end" title="Use the current playback position">Here</button>
+          </div>
+        </label>
+      </div>
+      <p class="sub" id="sound-length"></p>
+      <label class="field">
+        <span><input type="checkbox" id="sound-normalise" checked> Even out the volume
+          <span class="hint">— so it is no louder or quieter than the others</span></span>
+      </label>
+      <button type="button" class="btn" id="sound-preview">Preview</button>
+      <div class="result" id="sound-result" hidden>
+        <audio id="sound-result-audio" controls style="width:100%"></audio>
+        <div class="facts" id="sound-result-facts"></div>
+      </div>
+      <label class="field" style="margin-top:14px">
+        <span>Name on the doorbell</span>
+        <input type="text" id="sound-name" maxlength="60">
+      </label>
+    </div>
+  </div>
+  <div class="foot">
+    <button type="button" class="btn" id="sound-back" hidden>Back</button>
+    <div class="spacer"></div>
+    <button type="button" class="btn" id="sound-close">Close</button>
+    <button type="button" class="btn primary" id="sound-keep" hidden disabled>Add to doorbell</button>
+  </div>
 </dialog>
 
 <dialog id="account-dialog">

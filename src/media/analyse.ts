@@ -68,7 +68,7 @@ const BYTES_PER_FRAME_WORST = 15_645;
  * saying "upload it and find out", especially now that a bad upload can be
  * deleted.
  */
-const ALWAYS_SAFE_FRAMES = Math.floor(SPRITE_LIMIT_BYTES / BYTES_PER_FRAME_WORST);
+export const ALWAYS_SAFE_FRAMES = Math.floor(SPRITE_LIMIT_BYTES / BYTES_PER_FRAME_WORST);
 const NEVER_FITS_FRAMES = Math.floor(SPRITE_LIMIT_BYTES / BYTES_PER_FRAME_BEST);
 
 export type Verdict = "safe" | "borderline" | "likely-fails";

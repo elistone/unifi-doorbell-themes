@@ -13,6 +13,7 @@ import { adopt, apply, reconcile } from "../apply.ts";
 import { DirectoryAssetSource, ProtectImageDevice, ProtectSoundDevice } from "../device/adapter.ts";
 import { PrivateApi } from "../device/private.ts";
 import { Protect } from "../device/protect.ts";
+import { FreesoundSearch, GiphySearch } from "../media/search.ts";
 import { HttpNotifier } from "../notify.ts";
 import { Store } from "../store/db.ts";
 import { VERSION } from "../version.ts";
@@ -210,6 +211,15 @@ const handle = createHandler({
   // derived files, and the media directory is the one thing here that
   // cannot be regenerated.
   cacheDir: process.env.DOORMAN_CACHE ?? join(dirname(dbPath), "thumbs"),
+  stagingDir: join(dirname(dbPath), "staging"),
+  // Both optional. Without a key that search is not offered, and pasting a
+  // link still works.
+  gifSearch: process.env.GIPHY_API_KEY
+    ? new GiphySearch({ apiKey: process.env.GIPHY_API_KEY })
+    : undefined,
+  soundSearch: process.env.FREESOUND_API_KEY
+    ? new FreesoundSearch({ apiKey: process.env.FREESOUND_API_KEY })
+    : undefined,
   protectVersion,
   defaultSound: defaultRingtone,
   env: {

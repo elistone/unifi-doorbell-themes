@@ -208,3 +208,79 @@ describe("ring sounds without admin credentials", () => {
     );
   });
 });
+
+describe("importing", () => {
+  const post = (route: string, body: unknown) =>
+    api.routes[route](withJson(body), url(route.split(" ")[1]!));
+
+  it("offers no search without a key, and says which one", async () => {
+    await assert.rejects(
+      () => api.routes["GET /api/search/gifs"](undefined as never, url("/api/search/gifs?q=hi")),
+      /GIPHY_API_KEY/,
+    );
+    await assert.rejects(
+      () => api.routes["GET /api/search/sounds"](undefined as never, url("/api/search/sounds?q=hi")),
+      /FREESOUND_API_KEY/,
+    );
+  });
+
+  it("refuses an import id that is not one staging minted", async () => {
+    // The id names a file, so it is the one input here that reaches disk.
+    for (const id of ["../doorman.sqlite", "x.gif", undefined]) {
+      await assert.rejects(
+        () => post("POST /api/media/keep", { id, filename: "a.gif" }),
+        (error: unknown) => error instanceof HttpError && error.status === 400,
+      );
+    }
+  });
+
+  it("says an import has expired rather than failing obscurely", async () => {
+    await assert.rejects(
+      () => post("POST /api/media/render", { id: "00000000-0000-4000-8000-000000000000.gif" }),
+      /expired/,
+    );
+  });
+
+  it("keeps a staged GIF in the library and will not overwrite a name", async () => {
+    const { mkdir, mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { Staging } = await import("../src/media/staging.ts");
+
+    const root = await mkdtemp(join(tmpdir(), "doorman-api-"));
+    try {
+      const mediaDir = join(root, "media");
+      await mkdir(mediaDir);
+      const staging = new Staging(join(root, "staging"));
+      const local = createApi({
+        store,
+        source,
+        imageDeviceFor: () => new FakeDevice(),
+        soundDeviceFor: () => undefined,
+        protect: { displayCapableCameras: async () => [] } as never,
+        mediaDir,
+        cacheDir: join(root, "thumbs"),
+        stagingDir: staging.dir,
+        protectVersion: "7.2.105",
+      } as never);
+      const keep = (body: unknown) => local.routes["POST /api/media/keep"](withJson(body), url("/api/media/keep"));
+
+      const id = await staging.put(new Uint8Array(Buffer.from("GIF89a-one")), "gif");
+      const kept = (await keep({ id, filename: "wave" })) as { filename: string };
+      assert.equal(kept.filename, "wave.gif", "the extension is added when left off");
+
+      // elf.gif is in the (fake) library already.
+      const other = await staging.put(new Uint8Array(Buffer.from("GIF89a-two")), "gif");
+      await assert.rejects(() => keep({ id: other, filename: "elf.gif" }), /already in the library/);
+    } finally {
+      await rm(root, { recursive: true });
+    }
+  });
+
+  it("will not send a sound anywhere without admin credentials", async () => {
+    await assert.rejects(
+      () => post("POST /api/ringtones/keep", { id: "00000000-0000-4000-8000-000000000000.mp3", name: "x" }),
+      /admin credentials/,
+    );
+  });
+});

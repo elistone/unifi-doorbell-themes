@@ -302,7 +302,7 @@ h3 { font-size: 14px; margin: 0 0 10px; color: var(--text-dim); font-weight: 600
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tile .facts { font-size: 12px; color: var(--text-dim); display: flex; gap: 8px; flex-wrap: wrap; }
-.tile .acts { margin-top: auto; display: flex; gap: 6px; }
+.tile .acts { margin-top: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* -------------------------------------------------------------- calendar */
 
@@ -712,3 +712,118 @@ input[type="password"] {
 .notice strong { display: block; margin-bottom: 4px; }
 .notice ul { margin: 8px 0 12px; padding-left: 20px; }
 .notice li { margin: 3px 0; }
+
+/* ------------------------------------------------------------ importing */
+
+/* The import dialogs hold a results grid and an editor side by side, which
+   the default 560px squeezes into one column of postage stamps. */
+dialog.wide { max-width: 860px; }
+dialog.wide .content { max-height: 72vh; }
+
+.search-row { display: flex; gap: 8px; align-items: center; }
+.search-row input { flex: 1; min-width: 0; }
+
+input[type="search"] {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  margin: 14px 0 10px;
+}
+.result-tile {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 1;
+  background: var(--surface-2);
+  cursor: pointer;
+  position: relative;
+}
+.result-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.result-tile:hover, .result-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.result-tile .spin { position: absolute; inset: 0; margin: auto; }
+
+.editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 680px) {
+  .editor { grid-template-columns: 1fr; }
+}
+
+/* Shrinks to the image, so the crop box's offsets are the image's offsets.
+   A stage wider than the picture would put the box beside it. */
+.crop-stage {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  line-height: 0;
+  user-select: none;
+}
+.crop-stage img { display: block; max-width: 100%; max-height: 52vh; }
+
+.crop-box {
+  position: absolute;
+  border: 2px solid #fff;
+  /* Darken everything outside the square, which is what will be lost. */
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  cursor: move;
+  touch-action: none;
+}
+.crop-handle {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--accent);
+  cursor: nwse-resize;
+}
+
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+.result {
+  margin-top: 12px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* The doorbell's own size, so the preview is honest about what will show. */
+.result img { width: 120px; height: 120px; border-radius: 8px; border: 1px solid var(--border); }
+.result .facts, .sound-row .facts { font-size: 12px; color: var(--text-dim); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.sound-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+.sound-row:first-child { border-top: 0; }
+.sound-row .grow { flex: 1; min-width: 0; }
+.sound-row .fname { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sound-row a { color: var(--text-dim); }
+#sound-results { margin: 10px 0; }
+
+.trim-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+@media (max-width: 520px) {
+  .trim-row { grid-template-columns: 1fr; }
+}

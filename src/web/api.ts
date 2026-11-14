@@ -10,17 +10,22 @@
  * moment the button and the cron job can disagree about what "apply" means,
  * one of them is wrong and nobody can tell which.
  */
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { copyFile, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { apply, hashBytes, reconcile } from "../apply.ts";
 import type { AssetSource, ImageDevice, SoundDevice } from "../apply.ts";
 import { decide } from "../domain/decide.ts";
 import type { Device, Rule, Theme } from "../domain/types.ts";
-import { analyseGif } from "../media/analyse.ts";
+import { ALWAYS_SAFE_FRAMES, analyseGif } from "../media/analyse.ts";
 import type { GifAnalysis } from "../media/analyse.ts";
 import { fitToLimit } from "../media/transform.ts";
 import { Thumbnailer } from "../media/thumbnail.ts";
+import { centreCrop, probeDuration, renderAudio, renderGif } from "../media/edit.ts";
+import type { Crop } from "../media/edit.ts";
+import { hasYtDlp, importLink } from "../media/remote.ts";
+import type { FreesoundSearch, GiphySearch } from "../media/search.ts";
+import { Staging } from "../media/staging.ts";
 import { brokenSounds, relinkSounds, soundStatus } from "../sounds.ts";
 import { MAX_RINGTONES } from "../device/private.ts";
 import type { PrivateApi } from "../device/private.ts";
@@ -56,6 +61,13 @@ export interface ApiDeps {
   mediaDir: string;
   /** Where poster frames are cached. Regenerable, so losing it costs a decode. */
   cacheDir: string;
+  /** Where imports wait while they are cropped or trimmed. Disposable. */
+  stagingDir?: string;
+  /** Each present only when its API key was configured. */
+  gifSearch?: GiphySearch;
+  soundSearch?: FreesoundSearch;
+  /** Injected so the import routes are testable without the network. */
+  fetch?: typeof fetch;
   protectVersion: string;
   /** Read per call, so a change in Settings applies without a restart. */
   defaultSound?: () => string | undefined;
@@ -189,6 +201,30 @@ function safeName(name: string): string {
 export function createApi(deps: ApiDeps) {
   const { store, source, priv, mediaDir } = deps;
   const thumbnails = new Thumbnailer(deps.cacheDir);
+  const staging = new Staging(deps.stagingDir ?? join(deps.cacheDir, "..", "staging"));
+
+  /** A staged file's path, or a 404 that says the editor sat open too long. */
+  function stagedPath(id: unknown): string {
+    const path = typeof id === "string" ? staging.path(id) : null;
+    if (!path) throw new HttpError(400, "That is not an import id.");
+    return path;
+  }
+
+  async function assertStaged(path: string): Promise<void> {
+    await stat(path).catch(() => {
+      throw new HttpError(404, "That import has expired. Find it again.");
+    });
+  }
+
+  /** Errors from ffmpeg and the network are the user's to read, as a 400. */
+  async function asBadRequest<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(400, error instanceof Error ? error.message : String(error));
+    }
+  }
 
   /**
    * Resolve a `?device=` parameter to a configured doorbell.
@@ -329,6 +365,13 @@ export function createApi(deps: ApiDeps) {
         username: deps.callerOf(req),
         protectVersion: deps.protectVersion,
         soundEnabled: Boolean(priv),
+        // What the import dialogs can offer. Pasting a GIF or audio link
+        // always works; these are the extras that need a key or a binary.
+        importing: {
+          gifSearch: Boolean(deps.gifSearch),
+          soundSearch: Boolean(deps.soundSearch),
+          videoLinks: await hasYtDlp(),
+        },
         doorbells,
         counts: {
           devices: devices.length,
@@ -547,6 +590,157 @@ export function createApi(deps: ApiDeps) {
       const output = join(mediaDir, `${basename(filename, extname(filename))}-fitted.gif`);
       const result = await fitToLimit(input, output);
       return { from: filename, to: basename(output), ...result };
+    },
+
+    // ------------------------------------------------------------ importing
+
+    "GET /api/search/gifs": async (_req, url) => {
+      if (!deps.gifSearch) throw new HttpError(503, "GIF search needs GIPHY_API_KEY.");
+      const query = (url.searchParams.get("q") ?? "").trim();
+      if (!query) throw new HttpError(400, "Search for something.");
+      const offset = Number(url.searchParams.get("offset") ?? 0) || 0;
+      return asBadRequest(() => deps.gifSearch!.search(query, offset));
+    },
+
+    "GET /api/search/sounds": async (_req, url) => {
+      if (!deps.soundSearch) throw new HttpError(503, "Sound search needs FREESOUND_API_KEY.");
+      const query = (url.searchParams.get("q") ?? "").trim();
+      if (!query) throw new HttpError(400, "Search for something.");
+      const page = Number(url.searchParams.get("page") ?? 1) || 1;
+      return asBadRequest(() => deps.soundSearch!.search(query, page));
+    },
+
+    /**
+     * Bring something into staging so it can be cropped or trimmed: a link
+     * (a search result is one), or a GIF already in the library, which is
+     * how an old wide GIF gets squared up after the fact.
+     *
+     * Answers with what the editor needs to draw itself - dimensions and
+     * length - so it never has to guess at the source.
+     */
+    "POST /api/staging": async (req) => {
+      const body = await readJson<{ link?: string; filename?: string; kind?: string }>(req);
+      const kind = body.kind === "audio" ? "audio" : "gif";
+
+      let id: string;
+      if (body.filename) {
+        if (kind !== "gif") throw new HttpError(400, "Only library GIFs can be edited.");
+        const name = safeName(body.filename);
+        const bytes = await readFile(join(mediaDir, name)).catch(() => {
+          throw new HttpError(404, `${name} is not in the media library.`);
+        });
+        id = await staging.put(bytes, "gif");
+      } else if (body.link) {
+        id = await asBadRequest(() => importLink(body.link!, kind, staging, deps.fetch));
+      } else {
+        throw new HttpError(400, "Import what? Send a link or a filename.");
+      }
+
+      const path = staging.path(id)!;
+      if (kind === "audio") {
+        return { id, kind, durationSeconds: await asBadRequest(() => probeDuration(path)) };
+      }
+      const analysis = await asBadRequest(async () => analyseGif(path, (await stat(path)).size));
+      return {
+        id,
+        kind,
+        width: analysis.width,
+        height: analysis.height,
+        frames: analysis.frames,
+        durationSeconds: analysis.durationSeconds,
+        crop: centreCrop(analysis.width, analysis.height),
+        // For the editor's "this will become N frames" line as the trim moves.
+        safeFrames: ALWAYS_SAFE_FRAMES,
+      };
+    },
+
+    /**
+     * Crop and trim a staged GIF into a new staged GIF, for preview.
+     *
+     * The result is square, 240px, and never more frames than always fit -
+     * so an imported GIF does not need the Shrink button afterwards.
+     */
+    "POST /api/media/render": async (req) => {
+      const body = await readJson<{ id?: string; crop?: Crop; start?: number; end?: number }>(req);
+      const input = stagedPath(body.id);
+      await assertStaged(input);
+      const { id, path } = await staging.reserve("gif");
+      const analysis = await asBadRequest(() =>
+        renderGif(input, path, {
+          crop: body.crop,
+          start: body.start === undefined ? undefined : Number(body.start),
+          end: body.end === undefined ? undefined : Number(body.end),
+        }),
+      );
+      return {
+        id,
+        frames: analysis.frames,
+        bytes: analysis.sourceBytes,
+        verdict: analysis.verdict,
+        advice: analysis.advice,
+      };
+    },
+
+    /**
+     * Put a rendered GIF into the library under a name.
+     *
+     * Refuses to overwrite, unlike an upload: the editor suggests a name,
+     * and silently replacing a GIF a theme points at because two imports
+     * were both called "hello.gif" is a bad way to find out.
+     */
+    "POST /api/media/keep": async (req) => {
+      const body = await readJson<{ id?: string; filename?: string }>(req);
+      const input = stagedPath(body.id);
+      await assertStaged(input);
+
+      let filename = safeName((body.filename ?? "").trim());
+      if (!GIF_EXTENSIONS.has(extname(filename).toLowerCase())) filename += ".gif";
+
+      const bytes = await readFile(input);
+      const hash = hashBytes(bytes);
+      const files = await mediaIndex();
+      const existing = files.get(hash);
+      if (existing) return { filename: existing, hash, duplicateOf: existing };
+      if ([...files.values()].includes(filename)) {
+        throw new HttpError(409, `${filename} is already in the library. Choose another name.`);
+      }
+      await copyFile(input, join(mediaDir, filename));
+      return { filename, hash, bytes: bytes.byteLength };
+    },
+
+    /** Trim and normalise a staged sound into a staged MP3, for preview. */
+    "POST /api/ringtones/render": async (req) => {
+      const body = await readJson<{ id?: string; start?: number; end?: number; normalise?: boolean }>(req);
+      const input = stagedPath(body.id);
+      await assertStaged(input);
+      const { id, path } = await staging.reserve("mp3");
+      const result = await asBadRequest(() =>
+        renderAudio(input, path, {
+          start: body.start === undefined ? undefined : Number(body.start),
+          end: body.end === undefined ? undefined : Number(body.end),
+          normalise: body.normalise !== false,
+        }),
+      );
+      return { id, ...result };
+    },
+
+    /** Send a rendered sound to the doorbell as a ring sound. */
+    "POST /api/ringtones/keep": async (req) => {
+      if (!priv) throw new HttpError(503, "Ring sounds need admin credentials.");
+      const body = await readJson<{ id?: string; name?: string }>(req);
+      const input = stagedPath(body.id);
+      await assertStaged(input);
+      const name = (body.name ?? "").trim();
+      if (!name) throw new HttpError(400, "Give the sound a name.");
+
+      const existing = await priv.ringtones();
+      if (existing.length >= MAX_RINGTONES) {
+        throw new HttpError(
+          409,
+          `The doorbell holds ${MAX_RINGTONES} ring sounds and has ${existing.length}. Delete one first.`,
+        );
+      }
+      return priv.uploadRingtone(new Uint8Array(await readFile(input)), name);
     },
 
     /**
@@ -922,5 +1116,23 @@ export function createApi(deps: ApiDeps) {
     res.end(bytes);
   }
 
-  return { routes, serveMedia, serveThumbnail };
+  /** A staged import, for the editor to show or play. */
+  async function serveStaged(id: string, res: ServerResponse): Promise<void> {
+    const path = staging.path(id);
+    if (!path) throw new HttpError(404, "No such import.");
+    const bytes = await readFile(path).catch(() => {
+      throw new HttpError(404, "That import has expired.");
+    });
+    res.writeHead(200, {
+      "Content-Type": staging.typeOf(id),
+      "Content-Length": bytes.byteLength,
+      // The id is random and the file never changes under it.
+      "Cache-Control": "private, max-age=86400, immutable",
+      // Fetched from anywhere on the web, so doubly do not sniff it.
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.end(bytes);
+  }
+
+  return { routes, serveMedia, serveThumbnail, serveStaged };
 }

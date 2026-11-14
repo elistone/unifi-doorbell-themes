@@ -8,6 +8,13 @@ FROM node:24-alpine
 # not fit.
 RUN apk add --no-cache ffmpeg
 
+# Optional: pulling ring-sound audio out of YouTube and other video links.
+# Off by default - it is against YouTube's terms, and yt-dlp needs updating
+# whenever YouTube changes, which here means rebuilding the image.
+#   docker build --build-arg WITH_YTDLP=true -t doorman .
+ARG WITH_YTDLP=false
+RUN if [ "$WITH_YTDLP" = "true" ]; then apk add --no-cache yt-dlp; fi
+
 WORKDIR /app
 
 # No dependencies, so no install step and no layer caching to arrange.

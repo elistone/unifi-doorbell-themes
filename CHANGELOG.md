@@ -5,6 +5,25 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **Find a GIF** without leaving the app: search Giphy, or paste a link to
+  a GIF or a Giphy page. An editor crops it to a square, trims the start
+  and end, and writes a 240×240 GIF capped at the frame count that always
+  fits — so imports never need **Shrink**. **Crop** on a library tile opens
+  the same editor on a GIF already there, writing a new copy.
+- **Find a sound**: search Freesound (licence and author shown), or paste
+  a link to an audio file. Trim it, preview it, and it is uploaded as a
+  real MP3 with its loudness evened out to match the other ring sounds.
+- **Audio from YouTube links**, when `yt-dlp` is installed. Off by
+  default, and opt-in in Docker with `--build-arg WITH_YTDLP=true` —
+  downloading from YouTube is against its terms, and `yt-dlp` has to be
+  kept up to date.
+- `GIPHY_API_KEY` and `FREESOUND_API_KEY`, both optional. Without one that
+  search is not offered; pasting a link works either way.
+- Imports wait in `staging/` beside the database while they are edited,
+  not in the media library, and are swept after a day.
+
 ## 0.6.1 - 2026-10-24
 
 ## 0.6.0 - 2026-10-24

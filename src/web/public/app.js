@@ -125,6 +125,8 @@ const ICONS = {
   bell: '<path d="M8 1.9a4.2 4.2 0 0 0-4.2 4.2c0 2.4-.6 3.8-1 4.6a.5.5 0 0 0 .4.8h9.6a.5.5 0 0 0 .4-.8c-.4-.8-1-2.2-1-4.6A4.2 4.2 0 0 0 8 1.9Z"/><path d="M6.5 13.2a1.6 1.6 0 0 0 3 0"/>',
   shrink: '<path d="M6.4 9.6 2.4 13.6M6.4 13.6v-4h-4M9.6 6.4l4-4M9.6 2.4v4h4"/>',
   power: '<path d="M8 2.4v5.2"/><path d="M11.6 4.3a5 5 0 1 1-7.2 0"/>',
+  crop: '<path d="M4.4 1.6v9.9h9.9M1.6 4.4h9.9v9.9"/>',
+  stop: '<rect x="4" y="4" width="8" height="8" rx="1"/>',
 };
 
 const icon = (name) => `<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -880,6 +882,7 @@ async function renderMedia() {
           ${m.verdict && m.verdict !== "safe" ? `<div class="facts" style="font-size:11.5px">${esc(m.advice ?? "")}</div>` : ""}
           <div class="acts">
             ${m.verdict === "likely-fails" ? `<button class="btn small" data-fit="${esc(m.filename)}">${icon("shrink")}Shrink</button>` : ""}
+            <button class="btn small" data-crop="${esc(m.filename)}" title="Crop and trim into a new copy">${icon("crop")}Crop</button>
             <button class="btn small danger" data-del-media="${esc(m.filename)}" ${m.inUse ? "disabled title='Used by a theme'" : ""}>${icon("trash")}Delete</button>
           </div>
         </div>
@@ -896,6 +899,12 @@ async function renderMedia() {
         toast(`Wrote ${result.to} — the original is untouched.`, "ok");
         await renderMedia();
       }),
+    ),
+  );
+
+  $$("[data-crop]").forEach((b) =>
+    b.addEventListener("click", (e) =>
+      withBusy(e.currentTarget, () => cropFromLibrary(b.dataset.crop)),
     ),
   );
 
@@ -952,6 +961,8 @@ async function renderSounds() {
 
   await loadSounds();
   if (!fresh()) return;
+  // Nowhere to put a sound without admin credentials.
+  $("#find-sound").hidden = Boolean(sounds.unavailable);
   if (sounds.unavailable) {
     $("#sounds-list").innerHTML = emptyState(
       "Ring sounds are unavailable",
@@ -1058,6 +1069,459 @@ $("#upload-sound").addEventListener("change", async (event) => {
     event.target.value = "";
   }
 });
+
+// --------------------------------------------------------------- importing
+//
+// Find something, then crop or trim it, then keep it - without the round
+// trip through another site, an image editor and the upload button. Each
+// dialog has two views, so Back returns to the search results intact.
+
+const secs = (n) => `${Number(n).toFixed(1)}s`;
+const clamp = (value, lo, hi) => Math.min(Math.max(value, lo), hi);
+const postJson = (path, body) =>
+  api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+/** A filename from a title: lower case, hyphens, nothing a filesystem minds. */
+const slug = (text) =>
+  String(text ?? "")
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{2,4}$/, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50) || "imported";
+
+/** The last path segment of a link, as a name to start from. */
+function nameFromLink(link) {
+  try {
+    return decodeURIComponent(new URL(link).pathname.split("/").filter(Boolean).pop() ?? "");
+  } catch {
+    return "";
+  }
+}
+
+// ---------------------------------------------------------------- GIFs
+
+const gif = { query: "", next: null, staged: null, crop: null, rendered: null, fromLibrary: false };
+
+function gifView(view) {
+  $("#gif-find").hidden = view !== "find";
+  $("#gif-edit").hidden = view !== "edit";
+  // Arriving from a library tile there is no search to go back to.
+  $("#gif-back").hidden = view !== "edit" || gif.fromLibrary;
+  $("#gif-keep").hidden = view !== "edit";
+  $("#gif-dialog-title").textContent = view === "edit" ? "Crop and trim" : "Find a GIF";
+}
+
+$("#find-gif").addEventListener("click", () => {
+  // Unknown until the Now tab has loaded; offer search and let the server
+  // say if there is no key, rather than hiding it on a guess.
+  const searchable = state?.importing?.gifSearch !== false;
+  $("#gif-search-form").hidden = !searchable;
+  $("#gif-search-off").hidden = searchable;
+  gif.fromLibrary = false;
+  gifView("find");
+  $("#gif-dialog").showModal();
+  (searchable ? $("#gif-q") : $("#gif-link")).focus();
+});
+
+$("#gif-close").addEventListener("click", () => $("#gif-dialog").close());
+$("#gif-back").addEventListener("click", () => gifView("find"));
+
+async function searchGifs(append) {
+  const offset = append ? gif.next : 0;
+  const page = await api(`/api/search/gifs?q=${encodeURIComponent(gif.query)}&offset=${offset}`);
+  gif.next = page.next;
+  const tiles = page.results
+    .map(
+      (r) => `<button type="button" class="result-tile" data-link="${esc(r.url)}" data-title="${esc(r.title)}" title="${esc(r.title)}">
+        <img loading="lazy" alt="${esc(r.title)}" src="${esc(r.previewUrl)}">
+      </button>`,
+    )
+    .join("");
+  if (append) $("#gif-results").insertAdjacentHTML("beforeend", tiles);
+  else $("#gif-results").innerHTML = tiles || `<p class="sub">Nothing found for “${esc(gif.query)}”.</p>`;
+  $("#gif-more").hidden = page.next === null;
+}
+
+$("#gif-search-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  gif.query = $("#gif-q").value.trim();
+  if (gif.query) withBusy(submitter(event.target), () => searchGifs(false));
+});
+
+$("#gif-more").addEventListener("click", (e) => withBusy(e.currentTarget, () => searchGifs(true)));
+
+// Delegated, because results are appended page by page.
+$("#gif-results").addEventListener("click", (event) => {
+  const tile = event.target.closest("[data-link]");
+  if (tile) withBusy(tile, () => stageGif({ link: tile.dataset.link }, tile.dataset.title));
+});
+
+$("#gif-link-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const link = $("#gif-link").value.trim();
+  if (link) withBusy(submitter(event.target), () => stageGif({ link }, nameFromLink(link)));
+});
+
+async function cropFromLibrary(filename) {
+  gif.fromLibrary = true;
+  await stageGif({ filename }, `${filename.replace(/\.gif$/i, "")}-square`);
+  $("#gif-dialog").showModal();
+}
+
+async function stageGif(request, suggestedName) {
+  const staged = await postJson("/api/staging", { ...request, kind: "gif" });
+  gif.staged = staged;
+  gif.crop = { ...staged.crop };
+  gif.rendered = null;
+
+  // Giphy names everything "giphy.gif"; that is not a name, it is a host.
+  const name = slug(suggestedName);
+  $("#gif-name").value = `${name === "giphy" ? "imported" : name}.gif`;
+  $("#gif-result").hidden = true;
+
+  const animated = staged.durationSeconds > 0 && staged.frames > 1;
+  for (const id of ["#gif-start", "#gif-end"]) {
+    $(id).closest("label").hidden = !animated;
+    $(id).max = staged.durationSeconds.toFixed(2);
+  }
+  $("#gif-start").value = 0;
+  $("#gif-end").value = staged.durationSeconds;
+  updateGifTrim();
+
+  $("#crop-img").src = `/staging/${encodeURIComponent(staged.id)}`;
+  gifView("edit");
+}
+
+/** Anything that changes the result means the preview no longer shows it. */
+function invalidateGif() {
+  gif.rendered = null;
+  $("#gif-result").hidden = true;
+}
+
+function updateGifTrim(moved) {
+  const st = gif.staged;
+  if (!st) return;
+  const start = $("#gif-start");
+  const end = $("#gif-end");
+  // Keep the handles a tenth of a second apart and the right way round,
+  // pushing whichever one was not just moved.
+  if (Number(end.value) - Number(start.value) < 0.1) {
+    if (moved === start) start.value = Math.max(0, Number(end.value) - 0.1);
+    else end.value = Math.min(st.durationSeconds, Number(start.value) + 0.1);
+  }
+
+  $("#gif-start-label").textContent = `— ${secs(start.value)}`;
+  $("#gif-end-label").textContent = `— ${secs(end.value)} of ${secs(st.durationSeconds)}`;
+
+  if (!(st.durationSeconds > 0 && st.frames > 1)) {
+    $("#gif-estimate").textContent = "A still image - it will be cropped and scaled to the screen.";
+    return;
+  }
+  const length = Number(end.value) - Number(start.value);
+  const frames = Math.round((length * st.frames) / st.durationSeconds);
+  $("#gif-estimate").textContent =
+    frames > st.safeFrames
+      ? `${secs(length)}, about ${frames} frames. Each frame will be held a little longer to bring it to ${st.safeFrames}, which always fits.`
+      : `${secs(length)}, about ${frames} frames. That always fits.`;
+}
+
+for (const id of ["#gif-start", "#gif-end"]) {
+  $(id).addEventListener("input", (e) => {
+    updateGifTrim(e.target);
+    invalidateGif();
+  });
+}
+
+function drawCrop() {
+  const img = $("#crop-img");
+  if (!gif.staged || !img.clientWidth) return;
+  const scale = img.clientWidth / gif.staged.width;
+  const box = $("#crop-box");
+  box.style.left = `${gif.crop.x * scale}px`;
+  box.style.top = `${gif.crop.y * scale}px`;
+  box.style.width = box.style.height = `${gif.crop.size * scale}px`;
+}
+
+$("#crop-img").addEventListener("load", drawCrop);
+// The image resizes with the dialog, and the box has to follow it.
+new ResizeObserver(drawCrop).observe($("#crop-img"));
+
+/**
+ * Drag the square to move it, its corner to resize it. Pointer events and
+ * capture, so it works the same with a mouse, a finger or a pen, and keeps
+ * tracking when the pointer leaves the box mid-drag.
+ */
+let cropDrag = null;
+const cropBox = $("#crop-box");
+
+cropBox.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  cropDrag = {
+    mode: event.target.id === "crop-handle" ? "resize" : "move",
+    x: event.clientX,
+    y: event.clientY,
+    from: { ...gif.crop },
+    scale: $("#crop-img").clientWidth / gif.staged.width,
+  };
+  cropBox.setPointerCapture(event.pointerId);
+});
+
+cropBox.addEventListener("pointermove", (event) => {
+  if (!cropDrag) return;
+  const dx = (event.clientX - cropDrag.x) / cropDrag.scale;
+  const dy = (event.clientY - cropDrag.y) / cropDrag.scale;
+  const { width, height } = gif.staged;
+  const from = cropDrag.from;
+
+  if (cropDrag.mode === "move") {
+    gif.crop = {
+      size: from.size,
+      x: clamp(from.x + dx, 0, width - from.size),
+      y: clamp(from.y + dy, 0, height - from.size),
+    };
+  } else {
+    // Square, so one number: whichever way the corner moved further.
+    const room = Math.min(width - from.x, height - from.y);
+    gif.crop = { ...from, size: clamp(from.size + Math.max(dx, dy), 24, room) };
+  }
+  drawCrop();
+  invalidateGif();
+});
+
+for (const type of ["pointerup", "pointercancel"]) {
+  cropBox.addEventListener(type, () => (cropDrag = null));
+}
+
+async function renderGifPreview() {
+  const result = await postJson("/api/media/render", {
+    id: gif.staged.id,
+    crop: gif.crop,
+    start: Number($("#gif-start").value),
+    end: Number($("#gif-end").value),
+  });
+  gif.rendered = result;
+  const [kind, label] = VERDICT[result.verdict] ?? ["mute", "unreadable"];
+  $("#gif-result-img").src = `/staging/${encodeURIComponent(result.id)}`;
+  $("#gif-result-facts").innerHTML =
+    `<span class="badge ${kind}">${esc(label)}</span><span>${result.frames} frames</span><span>${kb(result.bytes)}</span>`;
+  $("#gif-result").hidden = false;
+  return result;
+}
+
+$("#gif-preview").addEventListener("click", (e) => withBusy(e.currentTarget, renderGifPreview));
+
+// Saving without previewing first renders on the way, rather than making
+// Preview a compulsory extra click.
+$("#gif-keep").addEventListener("click", (e) =>
+  withBusy(e.currentTarget, async () => {
+    const rendered = gif.rendered ?? (await renderGifPreview());
+    const result = await postJson("/api/media/keep", {
+      id: rendered.id,
+      filename: $("#gif-name").value.trim(),
+    });
+    toast(
+      result.duplicateOf ? `Already in the library as ${result.duplicateOf}.` : `Added ${result.filename}.`,
+      "ok",
+    );
+    $("#gif-dialog").close();
+    await renderMedia();
+  }),
+);
+
+// --------------------------------------------------------------- sounds
+
+const sound = { query: "", next: null, staged: null, rendered: null };
+
+/** One player for every Listen button, so two never talk over each other. */
+const listener = new Audio();
+let listening = null;
+
+function stopListening() {
+  listener.pause();
+  if (listening) listening.innerHTML = icon("play");
+  listening = null;
+}
+listener.addEventListener("ended", stopListening);
+
+function soundView(view) {
+  $("#sound-find").hidden = view !== "find";
+  $("#sound-edit").hidden = view !== "edit";
+  $("#sound-back").hidden = view !== "edit";
+  $("#sound-keep").hidden = view !== "edit";
+  $("#sound-dialog-title").textContent = view === "edit" ? "Trim the sound" : "Find a sound";
+}
+
+$("#find-sound").addEventListener("click", () => {
+  const searchable = state?.importing?.soundSearch !== false;
+  $("#sound-search-form").hidden = !searchable;
+  $("#sound-search-off").hidden = searchable;
+  $("#sound-video-hint").textContent = state?.importing?.videoLinks
+    ? "YouTube and other video links work too - the audio is pulled out for you to trim."
+    : "";
+  soundView("find");
+  $("#sound-dialog").showModal();
+  (searchable ? $("#sound-q") : $("#sound-link")).focus();
+});
+
+$("#sound-close").addEventListener("click", () => $("#sound-dialog").close());
+$("#sound-back").addEventListener("click", () => {
+  $("#sound-source").pause();
+  soundView("find");
+});
+
+// Nothing should keep playing behind a closed dialog.
+$("#sound-dialog").addEventListener("close", () => {
+  stopListening();
+  $("#sound-source").pause();
+  $("#sound-result-audio").pause();
+});
+
+async function searchSounds(append) {
+  const pageNumber = append ? sound.next : 1;
+  const page = await api(`/api/search/sounds?q=${encodeURIComponent(sound.query)}&page=${pageNumber}`);
+  sound.next = page.next;
+  const rows = page.results
+    .map(
+      (r) => `<div class="sound-row">
+        <button type="button" class="btn small" data-listen="${esc(r.previewUrl)}" aria-label="Listen to ${esc(r.name)}">${icon("play")}</button>
+        <div class="grow">
+          <div class="fname">${esc(r.name)}</div>
+          <div class="facts">
+            <span>${secs(r.durationSeconds)}</span>
+            <span class="badge mute" title="Licence">${esc(r.licence)}</span>
+            <a href="${esc(r.pageUrl)}" target="_blank" rel="noopener noreferrer">by ${esc(r.author)}</a>
+          </div>
+        </div>
+        <button type="button" class="btn small primary" data-use="${esc(r.previewUrl)}" data-name="${esc(r.name)}">Use</button>
+      </div>`,
+    )
+    .join("");
+  if (append) $("#sound-results").insertAdjacentHTML("beforeend", rows);
+  else $("#sound-results").innerHTML = rows || `<p class="sub">Nothing found for “${esc(sound.query)}”.</p>`;
+  $("#sound-more").hidden = page.next === null;
+}
+
+$("#sound-search-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  sound.query = $("#sound-q").value.trim();
+  if (sound.query) withBusy(submitter(event.target), () => searchSounds(false));
+});
+
+$("#sound-more").addEventListener("click", (e) => withBusy(e.currentTarget, () => searchSounds(true)));
+
+$("#sound-results").addEventListener("click", (event) => {
+  const listen = event.target.closest("[data-listen]");
+  if (listen) {
+    const same = listening === listen;
+    stopListening();
+    if (same) return;
+    listener.src = listen.dataset.listen;
+    listener.play().catch((error) => toast(error.message, "bad"));
+    listening = listen;
+    listen.innerHTML = icon("stop");
+    return;
+  }
+  const use = event.target.closest("[data-use]");
+  if (use) {
+    stopListening();
+    withBusy(use, () => stageSound({ link: use.dataset.use }, use.dataset.name));
+  }
+});
+
+$("#sound-link-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const link = $("#sound-link").value.trim();
+  if (link) withBusy(submitter(event.target), () => stageSound({ link }, nameFromLink(link)));
+});
+
+async function stageSound(request, suggestedName) {
+  const staged = await postJson("/api/staging", { ...request, kind: "audio" });
+  sound.staged = staged;
+  sound.rendered = null;
+
+  $("#sound-source").src = `/staging/${encodeURIComponent(staged.id)}`;
+  for (const id of ["#sound-start", "#sound-end"]) $(id).max = staged.durationSeconds.toFixed(1);
+  $("#sound-start").value = 0;
+  $("#sound-end").value = staged.durationSeconds.toFixed(1);
+  $("#sound-name").value = String(suggestedName ?? "")
+    .replace(/\.[a-z0-9]{2,4}$/i, "")
+    .trim()
+    .slice(0, 60);
+  $("#sound-result").hidden = true;
+  updateSoundLength();
+  soundView("edit");
+}
+
+function invalidateSound() {
+  sound.rendered = null;
+  $("#sound-result").hidden = true;
+  $("#sound-result-audio").pause();
+}
+
+function updateSoundLength() {
+  const length = Number($("#sound-end").value) - Number($("#sound-start").value);
+  $("#sound-length").textContent =
+    length <= 0
+      ? "The end is before the start."
+      : `${secs(length)} of ${secs(sound.staged.durationSeconds)}.` +
+        (length > 10 ? " That is long for a doorbell - most ring sounds are a few seconds." : "");
+}
+
+for (const id of ["#sound-start", "#sound-end"]) {
+  $(id).addEventListener("input", () => {
+    updateSoundLength();
+    invalidateSound();
+  });
+}
+$("#sound-normalise").addEventListener("change", invalidateSound);
+
+// Listen, pause where it should start, press Here. Easier than reading
+// timestamps off a scrubber.
+for (const [button, field] of [["#sound-mark-start", "#sound-start"], ["#sound-mark-end", "#sound-end"]]) {
+  $(button).addEventListener("click", () => {
+    $(field).value = $("#sound-source").currentTime.toFixed(1);
+    updateSoundLength();
+    invalidateSound();
+  });
+}
+
+async function renderSoundPreview() {
+  const result = await postJson("/api/ringtones/render", {
+    id: sound.staged.id,
+    start: Number($("#sound-start").value),
+    end: Number($("#sound-end").value),
+    normalise: $("#sound-normalise").checked,
+  });
+  sound.rendered = result;
+  $("#sound-result-audio").src = `/staging/${encodeURIComponent(result.id)}`;
+  $("#sound-result-facts").innerHTML = `<span>${secs(result.durationSeconds)}</span><span>${kb(result.bytes)} MP3</span>`;
+  $("#sound-result").hidden = false;
+  return result;
+}
+
+$("#sound-preview").addEventListener("click", (e) =>
+  withBusy(e.currentTarget, async () => {
+    await renderSoundPreview();
+    $("#sound-result-audio").play().catch(() => {});
+  }),
+);
+
+$("#sound-keep").addEventListener("click", (e) =>
+  withBusy(e.currentTarget, async () => {
+    const name = $("#sound-name").value.trim();
+    if (!name) throw new Error("Give the sound a name.");
+    const rendered = sound.rendered ?? (await renderSoundPreview());
+    const result = await postJson("/api/ringtones/keep", { id: rendered.id, name });
+    toast(`Added ${result.name} to the doorbell.`, "ok");
+    $("#sound-dialog").close();
+    await renderSounds();
+  }),
+);
 
 // ---------------------------------------------------------------- calendar
 

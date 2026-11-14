@@ -106,6 +106,47 @@ touch a doorbell you have not configured.
 
 Check your work on the **Calendar** tab before waiting for December.
 
+## Finding GIFs and sounds without leaving the app
+
+**Find a GIF** on the Images tab searches Giphy, or takes a pasted link —
+a GIF's own address or a Giphy page. Pick one and you get an editor: drag
+a square over the part you want, trim the start and end, preview, save.
+What lands in the library is 240×240 and never more frames than always
+fit, so nothing imported this way needs **Shrink** afterwards. **Crop** on
+any library tile opens the same editor and writes a new copy.
+
+**Find a sound** on the Sounds tab searches [Freesound](https://freesound.org),
+which is Creative Commons audio — each result shows its licence, and a
+CC BY sound asks you to credit its author. Or paste a link to an audio
+file. Trim it (play it, pause where it should start, press **Here**),
+preview, and it goes onto the doorbell as a real MP3 with its volume
+evened out to match the others.
+
+Both searches need a free API key and are simply not offered without one;
+pasting a link works regardless.
+
+| Variable | Where to get it |
+|---|---|
+| `GIPHY_API_KEY` | <https://developers.giphy.com/dashboard/> |
+| `FREESOUND_API_KEY` | <https://freesound.org/apiv2/apply/> |
+
+### Sound from YouTube
+
+If [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) is installed, pasting a
+YouTube link — or one from most other video sites — into **Find a sound**
+pulls out just the audio for you to trim. Clips over ten minutes are
+refused, since you only want a few seconds of them.
+
+It is **off unless you install it**, deliberately: downloading from
+YouTube is against its terms of service, and `yt-dlp` breaks whenever
+YouTube changes something, so it needs keeping up to date. In Docker:
+
+```bash
+docker build --build-arg WITH_YTDLP=true -t doorman .
+```
+
+Rebuild the image to update it when YouTube links stop working.
+
 ## More than one doorbell
 
 Doorman drives as many as you have. Add them in **Settings → Doorbells**,
@@ -223,7 +264,10 @@ Everything is an environment variable. Only the first three are required.
 | `NOTIFY_URL` | — | Pinged on apply, failure and stall. `{status}` and `{msg}` are substituted. |
 | `NOTIFY_METHOD` | `POST` | |
 | `PROTECT_INSECURE_TLS` | `true` | Consoles ship a self-signed certificate. Set `false` if yours has a real one. |
+| `GIPHY_API_KEY` | — | Turns on GIF search. See [Finding GIFs and sounds](#finding-gifs-and-sounds-without-leaving-the-app). |
+| `FREESOUND_API_KEY` | — | Turns on ring-sound search. |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | `ffmpeg` / `ffprobe` | If they are not on `PATH`. |
+| `YTDLP_BIN` | `yt-dlp` | Optional. Audio from YouTube links, when installed. |
 
 ## Behind a reverse proxy
 
@@ -376,7 +420,7 @@ strips the TypeScript itself, and does so without a flag only from 23.6. The
 container ships 24.
 
 ```bash
-npm test              # 121 tests
+npm test              # 193 tests
 npm run check         # tests + the import check below
 ```
 
