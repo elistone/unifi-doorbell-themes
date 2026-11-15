@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.10.0 - 2026-11-15
+
 ### Added
 
 - **Adopting sounds added through Protect.** Protect cannot hand a sound's
