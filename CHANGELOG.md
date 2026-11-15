@@ -5,6 +5,38 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **Adopting sounds added through Protect.** Protect cannot hand a sound's
+  audio back, so a sound uploaded there had no copy anywhere Doorman could
+  restore it from, and was never removed to make room - which is how a
+  console fills up with sounds Doorman cannot touch. Add the original file
+  to the library under the same name and the two are linked: no second
+  upload, and from then on Doorman may remove it to make room and put it
+  back later. Themes and the default naming it by id move over to the
+  library sound as it is adopted. The Sounds tab marks the sounds that
+  still have no copy.
+- **Doorman learns how many ring sounds the console really holds.** A live
+  console refused an upload at 10, not 12. Once a refusal is shown to be
+  about room (the retry after making room works), that number is
+  remembered and room is made before uploading from then on.
+- Every removal of a ring sound is logged, with what it made room for.
+
+### Fixed
+
+- **A doorbell could be left pointing at a ring sound that no longer
+  existed**, and Apply now could not repair it. When a theme's sound cannot
+  be put on, the default sound now plays instead, rather than the doorbell
+  keeping one Protect has replaced with a hidden fallback.
+- **Delete on the Sounds tab removed the sound a doorbell was playing.** It
+  now refuses that, and the default, and refuses outright if it cannot
+  tell what a doorbell is playing. Deleting one of Doorman's own copies
+  says it stays in the library.
+- **The cache would make room even when it could not read what the
+  doorbells were playing**, treating "unknown" as "nothing". It now
+  removes nothing in that case. It also never removes a ringtone a theme
+  still names by id, which nothing could bring back.
+
 ## 0.9.0 - 2026-11-15
 
 ### Added

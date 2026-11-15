@@ -45,9 +45,18 @@ class FakeController implements RingtoneHost {
   }
 }
 
+/**
+ * The library. Any hash reads as "sound <hash>", which is all most tests
+ * need; `named` lists sounds by a chosen name, for adoption.
+ */
+const named = new Map<string, string>();
 const files = {
   async read(hash: string) {
-    return hash === "missing" ? null : { sound: { name: `sound ${hash}` }, bytes: new Uint8Array([1]) };
+    if (hash === "missing") return null;
+    return { sound: { name: named.get(hash) ?? `sound ${hash}` }, bytes: new Uint8Array([1]) };
+  },
+  async list() {
+    return [...named].map(([hash, name]) => ({ hash, name }));
   },
 };
 
@@ -75,6 +84,7 @@ async function fill(c: RingtoneCache, hashes: string[]) {
 }
 
 beforeEach(() => {
+  named.clear();
   store = new Store(":memory:");
   controller = new FakeController();
   keep = new Set();
@@ -138,7 +148,7 @@ describe("ring sound cache", () => {
     const c = cache(5);
     await fill(c, ["a"]); // 5 of 5
     keep = new Set([store.ringtoneFor("a")!.ringtoneId]);
-    await assert.rejects(() => c.ensure("b"), /none of them is one Doorman can remove/);
+    await assert.rejects(() => c.ensure("b"), /none of its sounds is one Doorman can remove/);
     assert.deepEqual(controller.deleted, []);
   });
 
@@ -202,5 +212,120 @@ describe("what the daemon keeps", () => {
     assert.deepEqual(result.evicted, ["sound a"], "skipped the playing sound and the default");
     assert.ok(controller.tones.some((t) => t.id === stitch.ringtoneId));
     assert.ok(controller.tones.some((t) => t.id === "front-playing"));
+  });
+});
+
+describe("adopting sounds added through Protect", () => {
+  it("links a library sound to a same-named one already there, instead of uploading", async () => {
+    const c = cache();
+    const elf = controller.add("Elf - SANTA!");
+    named.set("elf", "elf - santa!");
+
+    const result = await c.ensure("elf");
+    assert.equal(result.ringtoneId, elf.id);
+    assert.equal(result.uploaded, false);
+    assert.equal(controller.uploads, 0, "no duplicate in a slot");
+  });
+
+  it("moves themes and the default off the ringtone id, so removing it cannot break them", async () => {
+    const elf = controller.add("Elf - SANTA!");
+    store.upsertTheme({
+      id: "christmas", name: "Christmas", image: "h", sound: elf.id, soundName: "Elf - SANTA!",
+      priority: 0, enabled: true, rules: [{}], devices: [],
+    });
+    store.setSetting("defaultRingtone", elf.id);
+    named.set("elf", "Elf - SANTA!");
+
+    const adopted = await cache().adopt(await controller.ringtones());
+    assert.deepEqual(adopted, ["Elf - SANTA!"]);
+    assert.equal(store.themes()[0]!.sound, "library:elf");
+    assert.equal(store.setting("defaultRingtone"), "library:elf");
+  });
+
+  it("makes an adopted sound one it may remove to make room", async () => {
+    const c = cache(6);
+    for (const name of ["Default", "Chime", "Bell", "Ding"]) controller.add(name, true);
+    controller.add("Schitt's Creek");
+    controller.add("Stranger Things");
+    named.set("schitt", "schitt's creek"); // the original, added to the library
+
+    const result = await c.ensure("new");
+    assert.deepEqual(result.evicted, ["Schitt's Creek"]);
+    assert.ok(controller.tones.some((t) => t.name === "Stranger Things"), "the one with no copy stays");
+  });
+
+  it("names the sounds that need a copy, when they are all that is left", async () => {
+    const c = cache(5);
+    for (const name of ["Default", "Chime", "Bell", "Ding"]) controller.add(name, true);
+    controller.add("Stranger Things");
+    await assert.rejects(() => c.ensure("new"), /"Stranger Things" has no copy in the library/);
+  });
+});
+
+describe("the real limit", () => {
+  it("is learned from a refusal, so next time room is made before uploading", async () => {
+    const c = cache(12);
+    await fill(c, ["a", "b"]); // 6 tones
+    controller.realLimit = 6;
+
+    await c.ensure("c"); // refused at 6, makes room, retries
+    assert.equal(c.limit, 6);
+
+    let refusals = 0;
+    const upload = controller.uploadRingtone.bind(controller);
+    controller.uploadRingtone = async (bytes, name) => {
+      try {
+        return await upload(bytes, name);
+      } catch (error) {
+        refusals++;
+        throw error;
+      }
+    };
+    await c.ensure("d");
+    assert.equal(refusals, 0, "made room first instead of being refused again");
+  });
+
+  it("is not learned when the retry fails too - that was the file, not the room", async () => {
+    const c = cache(12);
+    await fill(c, ["a", "b"]);
+    controller.realLimit = 0;
+    await assert.rejects(() => c.ensure("c"));
+    assert.equal(c.limit, 12);
+  });
+});
+
+describe("removing safely", () => {
+  it("removes nothing when it cannot tell what is playing", async () => {
+    const c = new RingtoneCache({
+      store, host: controller, files, limit: 6,
+      keep: async () => { throw new Error("speaker settings timed out"); },
+    });
+    await fill(c, ["a", "b"]);
+    await assert.rejects(() => c.ensure("c"), /could not check what the doorbells are playing/i);
+    assert.deepEqual(controller.deleted, []);
+  });
+
+  it("never removes a ringtone a theme still names by id", async () => {
+    const { createRingtoneCache } = await import("../src/ringtones.ts");
+    const c = createRingtoneCache({
+      store, host: controller, files, playing: async () => [], defaultSound: () => undefined,
+    });
+    for (const name of ["Default", "Chime", "Bell", "Ding"]) controller.add(name, true);
+    for (const hash of ["a", "b", "c", "d", "e", "f", "g", "h"]) await c.ensure(hash); // 12 of 12
+    store.upsertTheme({
+      id: "t", name: "T", image: "h", sound: store.ringtoneFor("a")!.ringtoneId,
+      priority: 0, enabled: true, rules: [{}], devices: [],
+    });
+
+    const result = await c.ensure("i");
+    assert.deepEqual(result.evicted, ["sound b"], "skipped a, which a theme names by id");
+  });
+
+  it("logs every removal", async () => {
+    const lines: string[] = [];
+    const c = new RingtoneCache({ store, host: controller, files, limit: 6, keep: async () => new Set(), log: (m) => lines.push(m) });
+    await fill(c, ["a", "b"]);
+    await c.ensure("c");
+    assert.match(lines.join("\n"), /removed "sound a" .* to make room for "sound c"/);
   });
 });

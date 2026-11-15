@@ -81,9 +81,10 @@ const ringtones = priv
       files: new SoundLibrary(join(mediaDir, "sounds")),
       playing: () =>
         Promise.all(
-          store.devices().map((d) => new ProtectSoundDevice(priv, d.id).currentRingtone().catch(() => null)),
+          store.devices().map((d) => new ProtectSoundDevice(priv, d.id).currentRingtone()),
         ),
       defaultSound,
+      log: (message) => console.log(message),
     })
   : undefined;
 

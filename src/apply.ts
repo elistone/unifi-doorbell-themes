@@ -145,6 +145,30 @@ async function setSound(
   sound: SoundDevice | undefined,
   wanted: string | undefined,
   ringtones: RingtoneResolver | undefined,
+  fallback?: string,
+): Promise<{ outcome: ApplyResult["sound"]; note?: string }> {
+  const result = await trySound(sound, wanted, ringtones);
+  if (result.outcome !== "failed" || !fallback || fallback === wanted) return result;
+
+  // The theme's sound could not be put on. Leaving the doorbell alone
+  // would keep yesterday's sound - or, if that ringtone has since been
+  // deleted, one Protect no longer has, which it answers with a hidden
+  // fallback of its own. The default is the sound this app already plays
+  // when a theme has none, so it is the honest stand-in for one it cannot
+  // play. Still reported as failed: the theme did not get its sound.
+  const instead = await trySound(sound, fallback, ringtones);
+  return {
+    outcome: "failed",
+    note:
+      `${result.note}; ` +
+      (instead.outcome === "failed" ? `the default could not be set either: ${instead.note}` : "playing the default instead"),
+  };
+}
+
+async function trySound(
+  sound: SoundDevice | undefined,
+  wanted: string | undefined,
+  ringtones: RingtoneResolver | undefined,
 ): Promise<{ outcome: ApplyResult["sound"]; note?: string }> {
   if (!wanted) return { outcome: undefined };
   if (!sound) return { outcome: "skipped" };
@@ -282,7 +306,7 @@ export async function apply(
       // nothing in the system able to notice or repair it.
       const { outcome: soundOutcome, note } = dryRun
         ? { outcome: undefined, note: undefined }
-        : await setSound(sound, wantedSound, ringtones);
+        : await setSound(sound, wantedSound, ringtones, defaultSound);
       const soundChanged = soundOutcome === "applied";
 
       return finish({
@@ -317,7 +341,7 @@ export async function apply(
     store.setLastAppliedAsset(deviceId, assetName);
     store.setCursor(deviceId, decision.cursor);
 
-    const { outcome: soundOutcome, note } = await setSound(sound, wantedSound, ringtones);
+    const { outcome: soundOutcome, note } = await setSound(sound, wantedSound, ringtones, defaultSound);
 
     return finish({
       outcome: "applied",

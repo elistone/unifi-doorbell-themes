@@ -989,11 +989,16 @@ async function renderSounds() {
       <tr>
         <td><strong>${esc(r.name)}</strong>
           ${r.isDefault ? `<span class="badge mute">stock</span>` : ""}
-          ${r.managed ? `<span class="badge mute" title="Doorman may remove this to make room, and put it back when a theme needs it">from the library</span>` : ""}</td>
+          ${r.managed ? `<span class="badge mute" title="Doorman may remove this to make room, and put it back when a theme needs it">from the library</span>` : ""}
+          ${
+            r.noCopy
+              ? `<span class="badge warn" title="Protect cannot hand this sound back, so Doorman never removes it and it holds a slot for good. Add the original file to the library under the name &quot;${esc(r.name)}&quot; and Doorman will manage it.">no copy in the library</span>`
+              : ""
+          }</td>
         <td class="mono">${esc(r.id)}</td>
         <td>${r.inUse ? `<span class="badge ok">in use</span>` : ""}</td>
         <td style="text-align:right">
-          ${r.isDefault ? "" : `<button class="btn small danger" data-del-sound="${esc(r.id)}" data-name="${esc(r.name)}">${icon("trash")}Delete</button>`}
+          ${r.isDefault ? "" : `<button class="btn small danger" data-del-sound="${esc(r.id)}" data-name="${esc(r.name)}" data-managed="${r.managed ? "1" : ""}">${icon("trash")}Delete</button>`}
         </td>
       </tr>`,
     )
@@ -1010,7 +1015,9 @@ async function renderSounds() {
   const repairable = broken.filter((b) => b.canRelinkTo).length;
 
   const full = sounds.ringtones.length >= sounds.limit;
-  const canMakeRoom = sounds.ringtones.some((r) => r.managed && !r.inUse);
+  // Doorman's own copies can be removed and brought back; nothing else can.
+  const canMakeRoom = sounds.ringtones.some((r) => r.managed);
+  const noCopy = sounds.ringtones.filter((r) => r.noCopy);
 
   const libraryRows = (sounds.library ?? [])
     .map(
@@ -1068,10 +1075,18 @@ async function renderSounds() {
     <p class="sub">
       ${sounds.ringtones.length} of ${sounds.limit} slots used.
       ${
+        noCopy.length > 0
+          ? `<br>${noCopy.length} ${noCopy.length === 1 ? "sound has" : "sounds have"} no copy in the library, so Doorman
+             will never remove ${noCopy.length === 1 ? "it" : "them"} to make room. Add the original
+             file${noCopy.length === 1 ? "" : "s"} to the library under the same name and Doorman takes
+             ${noCopy.length === 1 ? "it" : "them"} over.`
+          : ""
+      }
+      ${
         full
           ? canMakeRoom
             ? "Full, but Doorman will remove one of its library sounds to make room when it needs to."
-            : `<strong style="color:var(--bad)">Full, and nothing here is one Doorman can remove — delete one so library sounds can be put on.</strong>`
+            : `<strong style="color:var(--bad)">Full, and nothing here is one Doorman can remove and put back.</strong>`
           : ""
       }
     </p>
@@ -1145,10 +1160,13 @@ async function renderSounds() {
 
   $$("[data-del-sound]").forEach((b) =>
     b.addEventListener("click", async () => {
-      if (!confirm(`Delete the ring sound "${b.dataset.name}"? This cannot be undone.`)) return;
+      const question = b.dataset.managed
+        ? `Remove "${b.dataset.name}" from the doorbell? It stays in the library and goes back on when a theme needs it.`
+        : `Delete "${b.dataset.name}" from the doorbell? This is the only copy - it cannot be undone.`;
+      if (!confirm(question)) return;
       try {
         await api(`/api/ringtones?id=${encodeURIComponent(b.dataset.delSound)}`, { method: "DELETE" });
-        toast("Deleted.", "ok");
+        toast(b.dataset.managed ? "Removed from the doorbell - still in the library." : "Deleted.", "ok");
         await renderSounds();
       } catch (error) {
         toast(error.message, "bad");
@@ -1851,6 +1869,7 @@ $("#sound-keep").addEventListener("click", (e) =>
     const evicted = result.onDoorbell?.evicted ?? [];
     toast(
       (result.duplicate ? `Already in the library as ${result.name}.` : `Added ${result.name} to the library.`) +
+        (result.adopted?.length ? ` Linked to "${result.adopted.join('", "')}" already on the doorbell - Doorman manages it now.` : "") +
         (result.onDoorbell ? " It is on the doorbell now." : "") +
         (evicted.length > 0 ? ` Removed ${evicted.join(", ")} to make room - still in the library.` : ""),
       "ok",

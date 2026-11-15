@@ -809,12 +809,19 @@ export function createApi(deps: ApiDeps) {
       const bytes = new Uint8Array(await readFile(input));
       const { sound, duplicate } = await asBadRequest(() => library.add(bytes, body.name ?? ""));
 
+      // The same name as a sound added through Protect: link the two now, so
+      // the slot it holds becomes one Doorman can manage.
+      let adopted: string[] = [];
+      if (deps.ringtones && priv) {
+        adopted = await deps.ringtones.adopt(await priv.ringtones()).catch(() => []);
+      }
+
       let onDoorbell: { ringtoneId: string; evicted: string[] } | null = null;
       if (body.upload) {
         if (!deps.ringtones) throw new HttpError(503, "Ring sounds need admin credentials.");
         onDoorbell = await asBadRequest(() => deps.ringtones!.ensure(sound.hash));
       }
-      return { ...sound, ref: libraryRef(sound.hash), duplicate, onDoorbell };
+      return { ...sound, ref: libraryRef(sound.hash), duplicate, adopted, onDoorbell };
     },
 
     /** Put a library sound on the controller now, making room if it must. */
@@ -888,6 +895,10 @@ export function createApi(deps: ApiDeps) {
       if (!priv) throw new HttpError(503, "Ring sounds need admin credentials.");
       const tones = await priv.ringtones();
       deps.ringtones?.reconcile(tones);
+      // A sound added through Protect becomes manageable the moment its
+      // original is in the library; noticing it here means the Sounds tab
+      // is right as soon as it is opened.
+      await deps.ringtones?.adopt(tones);
 
       const refs = new Set(store.themes().map((t) => t.sound).filter(Boolean));
       const fallback = deps.defaultSound?.();
@@ -905,6 +916,9 @@ export function createApi(deps: ApiDeps) {
             // Doorman uploaded it and has the file, so it may remove it to
             // make room and put it back later.
             managed: hash !== undefined,
+            // Only on the controller, and Protect cannot hand it back - so
+            // Doorman will never remove it, and it holds a slot for good.
+            noCopy: !t.isDefault && hash === undefined,
             inUse: refs.has(t.id) || (hash !== undefined && refs.has(libraryRef(hash))),
           };
         }),
@@ -927,8 +941,33 @@ export function createApi(deps: ApiDeps) {
       if (using.length > 0) {
         throw new HttpError(409, `Still used by ${using.map((t) => t.name).join(", ")}.`);
       }
+
+      // What a doorbell is playing right now. Deleting it does not stop the
+      // doorbell pointing at it: Protect quietly swaps in a hidden sound of
+      // its own, and the dashboard can only say "points at a ring sound
+      // that no longer exists". If a doorbell cannot be read, refuse rather
+      // than guess.
+      for (const device of store.devices()) {
+        const playing = await deps.soundDeviceFor(device.id)?.currentRingtone().catch(() => {
+          throw new HttpError(503, `Could not check what ${device.name} is playing, so nothing was deleted.`);
+        });
+        if (playing === id) {
+          throw new HttpError(409, `${device.name} is playing it right now. Apply a different theme first.`);
+        }
+      }
+
+      const record = store.ringtoneRecords().find((r) => r.ringtoneId === id);
+      const fallback = deps.defaultSound?.();
+      if (fallback === id || (record && fallback === libraryRef(record.hash))) {
+        throw new HttpError(409, "It is the default ring sound. Choose another default first.");
+      }
+
       await priv.deleteRingtone(id);
-      return { removed: id };
+      if (record) store.forgetRingtone(record.hash);
+      console.log(`[${new Date().toISOString()}] removed ring sound ${id} - deleted on the Sounds tab`);
+      // A library sound's copy comes back when a theme needs it; anything
+      // else is gone for good, and the caller deserves to know which.
+      return { removed: id, inLibrary: Boolean(record) };
     },
 
     /**

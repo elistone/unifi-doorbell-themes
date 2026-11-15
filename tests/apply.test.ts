@@ -589,3 +589,36 @@ describe("library sounds", () => {
     assert.equal(result.sound, "skipped");
   });
 });
+
+describe("when the theme's sound cannot be put on", () => {
+  it("plays the default instead of leaving the old sound - or a deleted one - in place", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    sound.current = "a-ringtone-protect-deleted";
+    store.upsertTheme({ ...theme("xmas", "hash-a"), sound: "library:elf" });
+    const ringtones = {
+      async ensure(): Promise<never> {
+        throw new Error("the doorbell is full");
+      },
+    };
+
+    const result = await apply(
+      store, device, source, now,
+      { ringtones, defaultSound: "stock-default" },
+      undefined, sound,
+    );
+    assert.equal(sound.current, "stock-default");
+    assert.equal(result.sound, "failed", "the theme still did not get its own sound");
+    assert.match(result.reason, /the doorbell is full; playing the default instead/);
+  });
+
+  it("does not retry the same sound as its own fallback", async () => {
+    source.add("hash-a");
+    const sound = new FakeSound();
+    sound.failNext = true;
+    store.upsertTheme(theme("everyday", "hash-a"));
+    const result = await apply(store, device, source, now, { defaultSound: "stock-default" }, undefined, sound);
+    assert.equal(result.sound, "failed");
+    assert.doesNotMatch(result.reason, /playing the default instead/);
+  });
+});

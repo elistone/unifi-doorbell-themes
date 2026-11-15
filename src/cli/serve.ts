@@ -114,9 +114,12 @@ const ringtones = priv
       files: soundLibrary,
       playing: () =>
         Promise.all(
-          store.devices().map((d) => soundDeviceFor(d.id)?.currentRingtone().catch(() => null) ?? null),
+          // No catch: an unreadable doorbell might be playing anything, and
+          // the cache removes nothing rather than guess.
+          store.devices().map((d) => soundDeviceFor(d.id)?.currentRingtone() ?? null),
         ),
       defaultSound: defaultRingtone,
+      log,
     })
   : undefined;
 

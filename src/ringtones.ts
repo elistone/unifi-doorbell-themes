@@ -11,10 +11,13 @@
  * What is never removed, because nothing could put it back:
  *
  *   - stock sounds
- *   - sounds Doorman did not upload - added through Protect, or before
- *     0.8.0 - since there is no copy of them anywhere else
- *   - whatever a doorbell is playing right now, or the default sound, which
- *     the caller supplies as `keep`
+ *   - sounds with no copy in the library - added through Protect, or before
+ *     0.8.0 - since Protect offers no way to download them back. Adding the
+ *     original file to the library under the same name ADOPTS such a sound
+ *     (see `adopt`), and from then on it is as removable as any other.
+ *   - whatever a doorbell is playing right now, the default sound, and any
+ *     ringtone a theme still names by id, which the caller supplies as
+ *     `keep` - and if it cannot find out what is playing, nothing at all
  *
  * Churn is bounded by the schedule rather than by anything here: a theme's
  * sound is uploaded only when it is not already on the controller, which is
@@ -22,7 +25,7 @@
  */
 import { MAX_RINGTONES, ProtectError } from "./device/private.ts";
 import type { Ringtone } from "./device/private.ts";
-import { isLibraryRef, libraryHash } from "./sounds.ts";
+import { isLibraryRef, libraryHash, libraryRef } from "./sounds.ts";
 import type { Store } from "./store/db.ts";
 
 /** The slice of the private API this needs, so tests can stand in for it. */
@@ -34,6 +37,7 @@ export interface RingtoneHost {
 
 export interface SoundFiles {
   read(hash: string): Promise<{ sound: { name: string }; bytes: Uint8Array } | null>;
+  list(): Promise<Array<{ hash: string; name: string }>>;
 }
 
 export interface Ensured {
@@ -44,6 +48,16 @@ export interface Ensured {
   evicted: string[];
 }
 
+/**
+ * Compared case- and space-insensitively, the same as re-linking does:
+ * "Elf - SANTA!" in Protect and "elf - santa!.mp3" in the library are the
+ * same sound to the person who named them both.
+ */
+const nameKey = (name: string) => name.trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Where the learned limit is kept - see `ensure`. */
+const LEARNED_LIMIT = "ringtoneLimit";
+
 export class RingtoneCache {
   readonly #store: Store;
   readonly #host: RingtoneHost;
@@ -51,15 +65,21 @@ export class RingtoneCache {
   readonly #keep: () => Promise<Set<string>>;
   readonly #limit: number;
   readonly #now: () => Date;
+  readonly #log: (message: string) => void;
 
   constructor(options: {
     store: Store;
     host: RingtoneHost;
     files: SoundFiles;
-    /** Ringtone ids that must not be removed: playing now, or the default. */
+    /**
+     * Ringtone ids that must not be removed. Throwing means "cannot tell",
+     * and then nothing is removed.
+     */
     keep: () => Promise<Set<string>>;
     limit?: number;
     now?: () => Date;
+    /** Every removal goes through here, so a vanished sound is never a mystery. */
+    log?: (message: string) => void;
   }) {
     this.#store = options.store;
     this.#host = options.host;
@@ -67,6 +87,20 @@ export class RingtoneCache {
     this.#keep = options.keep;
     this.#limit = options.limit ?? MAX_RINGTONES;
     this.#now = options.now ?? (() => new Date());
+    this.#log = options.log ?? (() => {});
+  }
+
+  /**
+   * How many ringtones the controller will really hold.
+   *
+   * Protect's documented cap is 12, but a live console refused an upload
+   * with 10 present - most likely counting a built-in sound it does not
+   * list. So the number that actually caused a refusal is remembered, and
+   * room is made BEFORE uploading from then on rather than after a failure.
+   */
+  get limit(): number {
+    const learned = Number(this.#store.setting(LEARNED_LIMIT));
+    return Number.isInteger(learned) && learned > 0 ? Math.min(learned, this.#limit) : this.#limit;
   }
 
   /**
@@ -82,11 +116,50 @@ export class RingtoneCache {
     }
   }
 
+  /**
+   * Claim sounds already on the controller that the library has a copy of,
+   * matched by name. Returns the names adopted.
+   *
+   * This is how a sound added through Protect becomes one Doorman can
+   * manage: Protect cannot hand its audio back, so the person adds the
+   * original file to the library under the same name, and the two are
+   * linked here - no second upload, no duplicate in a slot.
+   *
+   * Themes and the default that named the ringtone by id are moved onto the
+   * library sound as they are adopted. Left on the id, they would break the
+   * first time the cache removed it to make room, with nothing to put back.
+   */
+  async adopt(live: Ringtone[]): Promise<string[]> {
+    const owned = new Set(this.#store.ringtoneRecords().map((r) => r.ringtoneId));
+    const unowned = live.filter((r) => !r.isDefault && !owned.has(r.id));
+    if (unowned.length === 0) return [];
+
+    const at = this.#now().toISOString();
+    const adopted: string[] = [];
+    for (const sound of await this.#files.list()) {
+      if (this.#store.ringtoneFor(sound.hash)) continue;
+      const match = unowned.find((r) => nameKey(r.name) === nameKey(sound.name) && !owned.has(r.id));
+      if (!match) continue;
+
+      this.#store.recordRingtone({ hash: sound.hash, ringtoneId: match.id, name: match.name, uploadedAt: at, lastUsed: at });
+      owned.add(match.id);
+      const ref = libraryRef(sound.hash);
+      for (const theme of this.#store.themes()) {
+        if (theme.sound === match.id) this.#store.upsertTheme({ ...theme, sound: ref, soundName: sound.name });
+      }
+      if (this.#store.setting("defaultRingtone") === match.id) this.#store.setSetting("defaultRingtone", ref);
+      this.#log(`adopted "${match.name}" (${match.id}) as a library sound`);
+      adopted.push(match.name);
+    }
+    return adopted;
+  }
+
   /** The ringtone id for a library sound, uploading it - and making room - if needed. */
   async ensure(hash: string): Promise<Ensured> {
     const at = this.#now().toISOString();
-    const live = await this.#host.ringtones();
+    let live = await this.#host.ringtones();
     this.reconcile(live);
+    await this.adopt(live);
 
     const known = this.#store.ringtoneFor(hash);
     if (known) {
@@ -98,7 +171,10 @@ export class RingtoneCache {
     if (!file) throw new Error(`sound ${hash.slice(0, 12)} is missing from the library`);
 
     const evicted: string[] = [];
-    if (live.length >= this.#limit) evicted.push(await this.#evict(live));
+    while (live.length >= this.limit) {
+      evicted.push(await this.#evict(live, file.sound.name));
+      live = await this.#host.ringtones();
+    }
 
     let uploaded: Ringtone;
     try {
@@ -112,16 +188,13 @@ export class RingtoneCache {
       if (!(error instanceof ProtectError) || error.status !== 400 || evicted.length > 0) {
         throw error;
       }
-      try {
-        evicted.push(await this.#evict(await this.#host.ringtones()));
-      } catch {
-        throw new Error(
-          "Protect refused the sound without saying why, and there is nothing Doorman " +
-            "can remove to make room - its slots are probably full of stock sounds and " +
-            "ones added outside Doorman. Delete one on the Sounds tab.",
-        );
-      }
+      const refusedAt = live.length;
+      evicted.push(await this.#evict(live, file.sound.name));
       uploaded = await this.#host.uploadRingtone(file.bytes, file.sound.name);
+      // Learned only now the retry has worked, which is what shows the
+      // refusal was about room and not about the file.
+      this.#store.setSetting(LEARNED_LIMIT, String(refusedAt));
+      this.#log(`Protect holds ${refusedAt} ring sounds at most, not ${this.#limit} - remembered`);
     }
 
     this.#store.recordRingtone({
@@ -145,26 +218,45 @@ export class RingtoneCache {
     if (!record) return "absent";
     if ((await this.#keep()).has(record.ringtoneId)) return "kept";
     const live = await this.#host.ringtones();
-    if (live.some((r) => r.id === record.ringtoneId)) await this.#host.deleteRingtone(record.ringtoneId);
+    if (live.some((r) => r.id === record.ringtoneId)) {
+      await this.#host.deleteRingtone(record.ringtoneId);
+      this.#log(`removed "${record.name}" (${record.ringtoneId}) - deleted from the library`);
+    }
     this.#store.forgetRingtone(hash);
     return "removed";
   }
 
   /** Remove the least recently used sound that is safe to remove. */
-  async #evict(live: Ringtone[]): Promise<string> {
-    const keep = await this.#keep();
+  async #evict(live: Ringtone[], forName: string): Promise<string> {
+    let keep: Set<string>;
+    try {
+      keep = await this.#keep();
+    } catch (error) {
+      // Not knowing what is playing is not permission to guess.
+      throw new Error(
+        `Could not check what the doorbells are playing, so nothing was removed to make room ` +
+          `(${error instanceof Error ? error.message : String(error)}).`,
+      );
+    }
     // Oldest first - ringtoneRecords is ordered by last use.
     for (const record of this.#store.ringtoneRecords()) {
       const tone = live.find((r) => r.id === record.ringtoneId);
       if (!tone || tone.isDefault || keep.has(tone.id)) continue;
       await this.#host.deleteRingtone(tone.id);
       this.#store.forgetRingtone(record.hash);
+      this.#log(`removed "${tone.name}" (${tone.id}) to make room for "${forName}" - still in the library`);
       return tone.name;
     }
+
+    const noCopy = live.filter((r) => !r.isDefault && !this.#store.ringtoneRecords().some((x) => x.ringtoneId === r.id));
     throw new Error(
-      `The doorbell's ${this.#limit} ring sound slots are full, and none of them is ` +
-        "one Doorman can remove - they are stock sounds, ones added outside Doorman, " +
-        "or playing right now. Delete one on the Sounds tab.",
+      `The doorbell is full (${live.length} of ${this.limit}), and none of its sounds is one Doorman can ` +
+        "remove and put back." +
+        (noCopy.length > 0
+          ? ` ${noCopy.map((r) => `"${r.name}"`).join(", ")} ${noCopy.length === 1 ? "has" : "have"} no copy in the ` +
+            "library - add the original file to the library under the same name and Doorman can manage it, " +
+            "or delete one on the Sounds tab."
+          : " Everything there is a stock sound or playing right now."),
     );
   }
 }
@@ -181,22 +273,32 @@ export function createRingtoneCache(options: {
   store: Store;
   host: RingtoneHost;
   files: SoundFiles;
-  /** What each doorbell is playing now. A failed read is null, not a throw. */
+  /**
+   * What each doorbell is playing now. Let a failed read THROW: a doorbell
+   * whose sound could not be read might be playing anything, so the cache
+   * must then remove nothing rather than guess.
+   */
   playing: () => Promise<Array<string | null>>;
   defaultSound: () => string | undefined;
+  log?: (message: string) => void;
 }): RingtoneCache {
   const { store } = options;
+  const idOf = (ref: string | undefined) =>
+    !ref ? undefined : isLibraryRef(ref) ? store.ringtoneFor(libraryHash(ref))?.ringtoneId : ref;
+
   return new RingtoneCache({
     store,
     host: options.host,
     files: options.files,
+    log: options.log,
     keep: async () => {
       const keep = new Set<string>();
       for (const id of await options.playing()) if (id) keep.add(id);
-      const fallback = options.defaultSound();
-      if (fallback) {
-        const id = isLibraryRef(fallback) ? store.ringtoneFor(libraryHash(fallback))?.ringtoneId : fallback;
-        if (id) keep.add(id);
+      const fallback = idOf(options.defaultSound());
+      if (fallback) keep.add(fallback);
+      // A theme naming a ringtone by id has nothing to bring it back with.
+      for (const theme of store.themes()) {
+        if (theme.sound && !isLibraryRef(theme.sound)) keep.add(theme.sound);
       }
       return keep;
     },

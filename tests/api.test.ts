@@ -337,3 +337,47 @@ describe("importing", () => {
     }
   });
 });
+
+describe("deleting a ring sound on the Sounds tab", () => {
+  function withSound(playing: string | Error) {
+    const deleted: string[] = [];
+    const local = createApi({
+      store,
+      source,
+      imageDeviceFor: () => new FakeDevice(),
+      soundDeviceFor: () => ({
+        currentRingtone: async () => {
+          if (playing instanceof Error) throw playing;
+          return playing;
+        },
+        setRingtone: async () => {},
+      }),
+      priv: { deleteRingtone: async (id: string) => void deleted.push(id), ringtones: async () => [] },
+      protect: { displayCapableCameras: async () => [] } as never,
+      mediaDir: "media",
+      cacheDir: "/tmp/doorman-test-thumbs",
+      protectVersion: "7.2.105",
+    } as never);
+    const del = (id: string) =>
+      local.routes["DELETE /api/ringtones"](undefined as never, url(`/api/ringtones?id=${id}`));
+    return { del, deleted };
+  }
+
+  it("refuses the one a doorbell is playing - Protect would swap in a hidden sound", async () => {
+    const { del, deleted } = withSound("tone-1");
+    await assert.rejects(() => del("tone-1"), /Front door is playing it right now/);
+    assert.deepEqual(deleted, []);
+  });
+
+  it("refuses when it cannot tell what is playing", async () => {
+    const { del, deleted } = withSound(new Error("timeout"));
+    await assert.rejects(() => del("tone-1"), /Could not check what Front door is playing/);
+    assert.deepEqual(deleted, []);
+  });
+
+  it("deletes one nothing is playing", async () => {
+    const { del, deleted } = withSound("tone-other");
+    await del("tone-1");
+    assert.deepEqual(deleted, ["tone-1"]);
+  });
+});
