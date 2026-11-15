@@ -5,6 +5,39 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **A dashboard on the first page.** Beside each doorbell's current image,
+  theme and sound: how many themes, images and ring sounds there are (with
+  the doorbell's twelve sound slots as a meter), a chart of what every daily
+  run did over the last 30 days, the themes shown most, the next two weeks
+  at a glance, and the latest runs. Backed by a new `GET /api/stats`.
+- **Search and filters** on Themes (enabled / disabled) and Images (in use,
+  unused, too big), and History filters by outcome and is grouped by day.
+- **Enable or disable a theme or doorbell from its card** with a switch,
+  without opening the editor.
+- **Drop a GIF or a sound anywhere** on Images or Sounds to upload it.
+- **Keys 1-7** move between pages.
+- **The sidebar collapses** to a rail of icons, with the button on its edge
+  or the `[` key, and stays that way next time.
+- **Doorman has a logo** - a ringing doorbell - in the sidebar, on the
+  sign-in page and as the browser tab icon, in place of the 🔔 emoji.
+- The theme editor shows the chosen image.
+
+### Changed
+
+- **A new look throughout, built with Tailwind.** A sidebar on wide screens
+  (a scrolling tab bar on phones), cards, an accent gradient, and
+  animation: pages and cards ease in, numbers count up, chart bars grow,
+  dialogs and notifications slide, and the current-page highlight glides
+  between tabs. All of it stops for anyone who has asked their system for
+  less motion. Light and dark both remain, with the choice now applied
+  before the first paint so the page never flashes the other one.
+- **Doorman's own dialogs replace the browser's** confirm and prompt boxes
+  - for deleting, renaming and adding a doorbell, which is now picked from
+  a list rather than by typing its number.
+- History and recent runs name themes rather than showing their ids.
+
 ## 0.13.0 - 2026-11-15
 
 ### Changed

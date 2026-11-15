@@ -34,9 +34,9 @@ jobs:
         with:
           node-version: '24'
 
-      # No `npm ci`: there are no dependencies and no lockfile. That is the
-      # point of the project, and a test that silently started needing one
-      # should fail here.
+      # No runtime dependencies - that is the point of the project, and a
+      # test that silently started needing one should fail here. Tailwind
+      # is a dev dependency, installed below only to check the stylesheet.
       - name: Check nothing crept into dependencies
         run: |
           if node -p "Object.keys(require('./package.json').dependencies ?? {}).length" | grep -qv '^0$'; then
@@ -53,6 +53,12 @@ jobs:
       # without the module they import while every local run passed.
       - name: Every import resolves in a clean checkout
         run: node scripts/check-imports.mjs
+
+      # style.css is generated from tailwind.css but committed, so the image
+      # needs no build. This catches it being stale - a class used in app.js
+      # that was never compiled renders as nothing, with no error anywhere.
+      - name: The committed stylesheet is up to date
+        run: npm ci && npm run check:css
 
   docker:
     name: Docker image builds

@@ -559,6 +559,19 @@ export class Store {
       .run(entry.at, entry.deviceId, entry.themeId, entry.assetName, entry.reason, entry.outcome);
   }
 
+  /** Every apply at or after `since` (an ISO time), oldest first, for the dashboard. */
+  appliesSince(since: string): Array<{ at: string; deviceId: string | null; themeId: string | null; outcome: string }> {
+    const rows = this.#db
+      .prepare("SELECT at, device_id, theme_id, outcome FROM applies WHERE at >= ? ORDER BY at")
+      .all(since) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      at: String(row.at),
+      deviceId: row.device_id == null ? null : String(row.device_id),
+      themeId: row.theme_id == null ? null : String(row.theme_id),
+      outcome: String(row.outcome),
+    }));
+  }
+
   recentApplies(limit = 20, deviceId?: string): Array<{
     at: string;
     deviceId: string | null;

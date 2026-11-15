@@ -41,7 +41,7 @@ const PUBLIC_ROUTES = new Set([
 ]);
 
 /** The login screen itself has to load before anyone can log in. */
-const PUBLIC_FILES = new Set(["/", "/index.html", "/style.css", "/app.js", "/favicon.ico"]);
+const PUBLIC_FILES = new Set(["/", "/index.html", "/style.css", "/app.js", "/logo.svg", "/favicon.ico"]);
 
 /**
  * Each tab's own address, all answered with the one page - which reads the

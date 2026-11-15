@@ -129,7 +129,7 @@ describe("the gate", () => {
   });
 
   it("serves the login page itself, or nobody could ever log in", async () => {
-    for (const path of ["/", "/style.css", "/app.js"]) {
+    for (const path of ["/", "/style.css", "/app.js", "/logo.svg"]) {
       assert.equal((await fetch(`${base}${path}`)).status, 200, path);
     }
   });

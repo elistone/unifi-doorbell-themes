@@ -9,7 +9,14 @@
   },
   "scripts": {
     "test": "node --test",
+    "css": "tailwindcss -i src/web/tailwind.css -o src/web/public/style.css --minify",
+    "css:watch": "tailwindcss -i src/web/tailwind.css -o src/web/public/style.css --watch",
+    "check:css": "node scripts/check-css.mjs",
     "check:imports": "node scripts/check-imports.mjs",
-    "check": "npm test && npm run check:imports"
+    "check": "npm test && npm run check:imports && npm run check:css"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.5",
+    "tailwindcss": "4.3.5"
   }
 }

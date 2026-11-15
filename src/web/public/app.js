@@ -2,8 +2,10 @@
  * Doorman UI.
  *
  * Plain modules, no framework and no build step - the same rule the server
- * follows. The page is six lists and one form; everything here is fetch,
- * template strings and one render function per tab.
+ * follows. Everything here is fetch, template strings and one render
+ * function per tab. Styling is Tailwind classes, compiled ahead of time into
+ * the committed style.css (see ../tailwind.css): a class written here only
+ * exists once `npm run css` has seen it.
  */
 
 // ------------------------------------------------------------------ utils
@@ -20,12 +22,90 @@ const esc = (value) =>
 const kb = (bytes) =>
   bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 
+const TOAST_ICONS = {
+  ok: '<path d="m3.5 8.4 3 3 6-6.4"/>',
+  bad: '<path d="M8 4v5M8 11.6v.2"/>',
+  "": '<path d="M8 7.2V12M8 4.4v.2"/>',
+};
+
 function toast(message, kind = "") {
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
-  el.textContent = message;
+  el.setAttribute("role", kind === "bad" ? "alert" : "status");
+  el.innerHTML = `<span class="ti"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true">${TOAST_ICONS[kind] ?? TOAST_ICONS[""]}</svg></span><span></span>`;
+  el.lastElementChild.textContent = message;
   $("#toasts").append(el);
-  setTimeout(() => el.remove(), kind === "bad" ? 9000 : 4500);
+  // Slides out rather than vanishing; click to dismiss early.
+  const leave = () => {
+    if (el.classList.contains("leaving")) return;
+    el.classList.add("leaving");
+    el.addEventListener("animationend", () => el.remove(), { once: true });
+    setTimeout(() => el.remove(), 400);
+  };
+  el.addEventListener("click", leave);
+  setTimeout(leave, kind === "bad" ? 9000 : 4500);
+}
+
+/**
+ * Ask something in the page's own dialog, instead of confirm() and prompt().
+ *
+ * Resolves with the answer, or null if cancelled: true for a plain
+ * confirmation, the text for `input`, `{ choice, text }` with `choices`.
+ * `onChoice` lets the text follow the choice - picking a camera fills in
+ * its name.
+ */
+function ask({ title, body = "", ok = "OK", danger = false, input = null, choices = null, onChoice = null, icon: glyph = "info" }) {
+  const dialog = $("#ask-dialog");
+  $("#ask-title").textContent = title;
+  $("#ask-body").textContent = body;
+  $("#ask-body").hidden = !body;
+  $("#ask-icon").innerHTML = icon(glyph);
+  $("#ask-icon").className = `grid size-8 place-items-center rounded-xl ${danger ? "bg-bad-bg text-bad" : "bg-accent-soft text-accent"}`;
+  $("#ask-ok").textContent = ok;
+  $("#ask-ok").className = `btn ${danger ? "danger solid" : "primary"}`;
+
+  $("#ask-input-field").hidden = !input;
+  $("#ask-input").required = Boolean(input);
+  if (input) {
+    $("#ask-input-label").textContent = input.label ?? "";
+    $("#ask-input").value = input.value ?? "";
+  }
+
+  $("#ask-choices").hidden = !choices;
+  $("#ask-choices").innerHTML = (choices ?? [])
+    .map(
+      (c, i) => `<label class="choice">
+        <input type="radio" name="ask-choice" value="${i}" ${i === 0 ? "checked" : ""}>
+        <span class="min-w-0"><span class="block truncate text-sm font-semibold">${esc(c.label)}</span>${c.hint ? `<span class="block text-xs text-dim">${esc(c.hint)}</span>` : ""}</span>
+      </label>`,
+    )
+    .join("");
+  const picked = () => choices?.[Number($("#ask-choices input:checked")?.value ?? 0)];
+  if (choices && onChoice) {
+    $("#ask-input").value = onChoice(picked()) ?? "";
+    $("#ask-choices").onchange = () => ($("#ask-input").value = onChoice(picked()) ?? "");
+  }
+
+  return new Promise((resolve) => {
+    let answer = null;
+    $("#ask-form").onsubmit = (event) => {
+      event.preventDefault();
+      const text = $("#ask-input").value.trim();
+      if (input && !text) return;
+      answer = choices ? { choice: picked(), text } : input ? text : true;
+      dialog.close();
+    };
+    $("#ask-cancel").onclick = () => dialog.close();
+    dialog.addEventListener("close", () => resolve(answer), { once: true });
+    dialog.showModal();
+    if (input) {
+      $("#ask-input").focus();
+      $("#ask-input").select();
+    } else {
+      // The safe button, so a stray Enter does not delete anything.
+      (danger ? $("#ask-cancel") : $("#ask-ok")).focus();
+    }
+  });
 }
 
 /**
@@ -219,7 +299,21 @@ const ICONS = {
   power: '<path d="M8 2.4v5.2"/><path d="M11.6 4.3a5 5 0 1 1-7.2 0"/>',
   crop: '<path d="M4.4 1.6v9.9h9.9M1.6 4.4h9.9v9.9"/>',
   stop: '<rect x="4" y="4" width="8" height="8" rx="1"/>',
+  info: '<circle cx="8" cy="8" r="6"/><path d="M8 7.3v3.9M8 5v.2"/>',
+  alert: '<path d="M7.1 2.6a1 1 0 0 1 1.8 0l5.4 9.6a1 1 0 0 1-.9 1.5H2.6a1 1 0 0 1-.9-1.5Z"/><path d="M8 6.4v3M8 11.3v.2"/>',
+  check: '<path d="m3.5 8.4 3 3 6-6.4"/>',
+  layers: '<rect x="1.8" y="2.8" width="8" height="8" rx="1.4"/><path d="M12.2 5.2h1.4a.6.6 0 0 1 .6.6v7a.6.6 0 0 1-.6.6h-7a.6.6 0 0 1-.6-.6v-1.4"/>',
+  image: '<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.6"/><circle cx="5.6" cy="6.4" r="1.1"/><path d="m2.4 11.4 3.1-2.8 2.6 2.3 2.4-2 3.1 2.7"/>',
+  sound: '<path d="M8.6 2.6 5 5.6H2.6v4.8H5l3.6 3V2.6Z"/><path d="M11.4 5.9a3.4 3.4 0 0 1 0 4.2M13.3 4a6 6 0 0 1 0 8"/>',
+  calendar: '<rect x="2" y="3.2" width="12" height="10.8" rx="1.4"/><path d="M2 6.6h12M5.4 1.8v2.4M10.6 1.8v2.4"/>',
+  clock: '<circle cx="8" cy="8" r="6"/><path d="M8 4.8V8l2.2 1.4"/>',
+  activity: '<path d="M1.6 8h2.8l1.8-4.6 3.4 9.2 1.8-4.6h3"/>',
+  spark: '<path d="M8 1.8v3M8 11.2v3M1.8 8h3M11.2 8h3M3.6 3.6l2 2M10.4 10.4l2 2M12.4 3.6l-2 2M5.6 10.4l-2 2"/>',
+  search: '<circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/>',
 };
+
+/** Three bouncing bars, shown on a Listen button while its sound plays. */
+const EQ = '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>';
 
 const icon = (name) => `<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
 
@@ -241,25 +335,28 @@ const VERDICT = {
 
 // -------------------------------------------------------------- skeletons
 
-const skLines = (n = 2) => Array.from({ length: n }, () => '<div class="sk sk-line"></div>').join("");
+const skLines = (n = 2) =>
+  Array.from({ length: n }, (_, i) => `<div class="sk sk-line" style="width:${[90, 60, 75, 45, 80][i % 5]}%"></div>`).join("");
 
+/** Card-shaped rows, for lists of themes, doorbells and sounds. */
 const skeletonRows = (n) =>
   Array.from(
     { length: n },
-    () => `<div class="sk-row"><div class="sk sk-thumb"></div><div>${skLines(2)}</div><div class="sk sk-line"></div></div>`,
+    () =>
+      `<div class="card flex items-center gap-4 !p-4"><div class="sk size-16 shrink-0 !rounded-xl"></div><div class="flex-1">${skLines(2)}</div></div>`,
   ).join("");
 
 const skeletonTiles = (n) =>
   Array.from(
     { length: n },
-    () => `<div class="sk-tile"><div class="sk sk-img"></div><div class="sk-body">${skLines(2)}</div></div>`,
+    () => `<div class="card flush"><div class="sk aspect-square !rounded-none"></div><div class="p-3">${skLines(2)}</div></div>`,
   ).join("");
 
 // Wrapped in the same month/grid shell the real calendar uses, or the
 // placeholder is a flat column that collapses into a grid when data lands.
 const skeletonDays = (n) =>
-  `<section class="month"><div class="sk sk-line" style="width:140px;height:15px;margin-bottom:10px"></div>
-    <div class="cal">${Array.from({ length: n }, () => '<div class="sk sk-day"></div>').join("")}</div>
+  `<section class="month"><div class="sk mb-3 h-4 w-36"></div>
+    <div class="cal">${Array.from({ length: n }, () => '<div class="sk min-h-[96px] !rounded-xl max-sm:min-h-[74px]"></div>').join("")}</div>
   </section>`;
 
 /**
@@ -299,7 +396,7 @@ const TABS = ["now", "themes", "media", "sounds", "calendar", "history", "settin
  * Back and Forward; the server answers every one of them with this page.
  */
 const PAGES = {
-  now: { path: "/", title: "Now" },
+  now: { path: "/", title: "Dashboard" },
   themes: { path: "/themes", title: "Themes" },
   media: { path: "/images", title: "Images" },
   sounds: { path: "/sounds", title: "Sounds" },
@@ -319,12 +416,23 @@ let currentTab = "now";
 
 function show(tab, { push = true } = {}) {
   if (!TABS.includes(tab)) return;
+  const moved = currentTab !== tab;
   currentTab = tab;
-  for (const name of TABS) $(`#tab-${name}`).hidden = name !== tab;
+  for (const name of TABS) {
+    const section = $(`#tab-${name}`);
+    section.hidden = name !== tab;
+    // Replayed on each arrival: removing and re-adding the class restarts it.
+    if (name === tab && moved) {
+      section.classList.remove("enter");
+      void section.offsetWidth;
+      section.classList.add("enter");
+    }
+  }
   for (const link of $$("nav [data-tab]")) {
     if (link.dataset.tab === tab) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
+  placeNavPill();
   document.title = `${PAGES[tab].title} · Doorman`;
   if (push && location.pathname !== PAGES[tab].path) history.pushState(null, "", PAGES[tab].path);
 
@@ -362,49 +470,148 @@ const TAB_CONTENT = {
 // These are links, so a middle click, Cmd/Ctrl-click or Shift-click is left
 // to the browser and opens the tab somewhere new; only a plain click is
 // handled here, without reloading the page.
-$$("nav a[data-tab]").forEach((link) =>
-  link.addEventListener("click", (event) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    show(link.dataset.tab);
-  }),
-);
+//
+// Delegated, because tab links live outside the nav too - the brand, and
+// the "Full calendar" and "All" links on the dashboard.
+document.addEventListener("click", (event) => {
+  const link = event.target.closest?.("a[data-tab]");
+  if (!link) return;
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  show(link.dataset.tab);
+});
 
 window.addEventListener("popstate", () => show(tabAt(location.pathname), { push: false }));
 
+/**
+ * The highlight behind the current tab, which slides from one to the next
+ * rather than jumping. Measured, so it fits the link whether the nav is a
+ * column (wide screens) or a row (narrow ones).
+ */
+function placeNavPill() {
+  const pill = $("#nav-pill");
+  const link = $(`nav [data-tab="${currentTab}"]`);
+  if (!pill || !link || !link.offsetWidth) return;
+  pill.style.width = `${link.offsetWidth}px`;
+  pill.style.height = `${link.offsetHeight}px`;
+  pill.style.transform = `translate(${link.offsetLeft}px, ${link.offsetTop}px)`;
+  link.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+new ResizeObserver(placeNavPill).observe($("#nav"));
+
+/**
+ * Collapse the sidebar to its icons, or open it again. Remembered per
+ * browser, and set before first paint by the snippet in index.html.
+ */
+const SIDEBAR_KEY = "doorman-sidebar";
+
+function setSidebar(collapsed) {
+  if (collapsed) document.documentElement.dataset.sidebar = "collapsed";
+  else delete document.documentElement.dataset.sidebar;
+  const button = $("#collapse-side");
+  const label = collapsed ? "Expand the sidebar" : "Collapse the sidebar";
+  button.setAttribute("aria-expanded", String(!collapsed));
+  button.setAttribute("aria-label", label);
+  button.title = `${label} ( [ )`;
+  try {
+    if (collapsed) localStorage.setItem(SIDEBAR_KEY, "collapsed");
+    else localStorage.removeItem(SIDEBAR_KEY);
+  } catch {
+    // Still collapses for this visit.
+  }
+}
+
+const sidebarCollapsed = () => document.documentElement.dataset.sidebar === "collapsed";
+setSidebar(sidebarCollapsed());
+$("#collapse-side").addEventListener("click", () => setSidebar(!sidebarCollapsed()));
+
+// With only icons showing, each tab's name is its tooltip.
+for (const link of $$(".nav-link")) link.title = link.querySelector("span").textContent;
+
+// 1-7 to jump between tabs, as numbered in the sidebar - except while
+// typing, or with a dialog open.
+document.addEventListener("keydown", (event) => {
+  if (event.metaKey || event.ctrlKey || event.altKey || $("#app").hidden) return;
+  if (event.target.closest?.("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
+  if (event.key === "[") return setSidebar(!sidebarCollapsed());
+  const tab = TABS[Number(event.key) - 1];
+  if (tab) show(tab);
+});
+
 // -------------------------------------------------------------- Now panel
+
+/** "3 min ago", "yesterday", "12 Nov" - for when something last happened. */
+function ago(iso) {
+  const seconds = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  if (seconds < 172800) return "yesterday";
+  if (seconds < 604800) return `${Math.floor(seconds / 86400)} days ago`;
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/** What an apply's outcome is called, and the colour it is drawn in. */
+const OUTCOMES = {
+  applied: { label: "changed", badge: "ok", mark: "--mark-good" },
+  unchanged: { label: "unchanged", badge: "mute", mark: "--mark-neutral" },
+  "no-theme": { label: "no theme", badge: "warn", mark: "--mark-warning" },
+  failed: { label: "failed", badge: "bad", mark: "--mark-critical" },
+  "dry-run": { label: "preview", badge: "accent", mark: "--mark-neutral" },
+};
+const outcomeOf = (outcome) => OUTCOMES[outcome] ?? { label: outcome, badge: "mute", mark: "--mark-neutral" };
+
+/**
+ * Numbers that count up to their value as they arrive. Only from what was
+ * on screen before, so a background refresh that changes nothing is still.
+ */
+function countUp(root) {
+  for (const el of root.querySelectorAll("[data-count]")) {
+    const target = Number(el.dataset.count);
+    const from = Number(el.dataset.from ?? 0);
+    if (from === target || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      el.textContent = target;
+      continue;
+    }
+    const began = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - began) / 700);
+      el.textContent = Math.round(from + (target - from) * (1 - (1 - t) ** 3));
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+}
 
 async function renderNow() {
   const fresh = ticket("now");
-  $("#now-panel").innerHTML = `<div class="card now">
-    <div class="sk" style="aspect-ratio:1;border-radius:var(--radius)"></div>
-    <div>${skLines(5)}</div></div>`;
+  const hour = new Date().getHours();
+  const greeting = hour < 5 ? "Good night" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  $("#now-date").textContent = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  if (!state) {
+    $("#now-panel").innerHTML = `<div class="card grid gap-6 md:grid-cols-[220px_1fr]">
+      <div class="sk aspect-square !rounded-[22px]"></div><div class="pt-2">${skLines(5)}</div></div>`;
+  }
 
   state = await load("/api/state", "now");
   if (!fresh()) return;
 
-  $("#version").textContent = `v${state.version}`;
-  if (state.username) $("#who").textContent = state.username;
+  $("#now-greeting").innerHTML = `${greeting}${state.username ? `, <span class="text-gradient">${esc(state.username)}</span>` : ""}`;
+  showIdentity();
 
-  if (state.doorbells.length === 0) {
-    $("#now-panel").innerHTML = emptyState(
-      "No doorbell configured",
-      "Add one in Settings and Doorman will start scheduling it.",
-    );
-  } else {
-    $("#now-panel").innerHTML = state.doorbells.map(doorbellCard).join("");
-  }
-
-  $("#counts").innerHTML = `
-    <dt>Doorbells</dt><dd>${state.counts.devices}</dd>
-    <dt>Themes</dt><dd>${state.counts.themes}</dd>
-    <dt>Images</dt><dd>${state.counts.media}</dd>
-    <dt>Ring sounds</dt><dd>${state.counts.ringtones} of ${state.counts.ringtoneLimit}</dd>`;
+  $("#now-panel").innerHTML =
+    state.doorbells.length === 0
+      ? `<div class="card">${emptyState(
+          "No doorbell configured",
+          "Add one in Settings and Doorman will start scheduling it.",
+          "bell",
+        )}</div>`
+      : state.doorbells.map(doorbellCard).join("");
 
   // Per-doorbell apply, wired after render.
   $$("[data-apply-device]").forEach((b) =>
     b.addEventListener("click", (e) =>
-      withBusy(e.target, async () => {
+      withBusy(e.currentTarget, async () => {
         const { results } = await api(
           `/api/apply?device=${encodeURIComponent(b.dataset.applyDevice)}`,
           { method: "POST" },
@@ -414,13 +621,18 @@ async function renderNow() {
       }),
     ),
   );
+
+  // The rest of the dashboard, each part on its own so a slow or failing
+  // one (the sound list needs Protect) does not hold up the others.
+  const parts = [renderNowStats, renderNowActivity, renderNowUpcoming, renderNowRecent];
+  await Promise.all(parts.map((part) => part(fresh).catch(() => {})));
 }
 
 /** One doorbell: what it is showing, what it will show, and why. */
 function doorbellCard(d) {
   const image = d.showing.filename
-    ? `<img src="/media/${encodeURIComponent(d.showing.filename)}" alt="">`
-    : `<div class="empty">${d.showing.assetName ? "Showing something not in this library" : "Nothing set"}</div>`;
+    ? `<img src="/media/${encodeURIComponent(d.showing.filename)}" alt="What the doorbell is showing">`
+    : `<div class="grid size-full place-items-center p-4 text-center text-[13px] text-faint">${d.showing.assetName ? "Showing something not in this library" : "Nothing set"}</div>`;
 
   const sound = !state.soundEnabled
     ? `<span class="badge mute">no admin credentials</span>`
@@ -430,29 +642,263 @@ function doorbellCard(d) {
 
   const last = d.last;
   const outcome = last
-    ? `<span class="badge ${last.outcome === "failed" ? "bad" : last.outcome === "no-theme" ? "warn" : "ok"}">${esc(last.outcome)}</span>`
+    ? `<span class="badge ${outcomeOf(last.outcome).badge}">${esc(outcomeOf(last.outcome).label)}</span>
+       <span class="text-xs font-normal text-faint" title="${esc(new Date(last.at).toLocaleString())}">${esc(ago(last.at))}</span>`
     : `<span class="badge mute">never run</span>`;
 
+  const fact = (glyph, label, value, extra = "") => `
+    <div class="min-w-0 rounded-xl bg-surface-2/70 p-3 ${extra}">
+      <div class="mb-1 flex items-center gap-1.5 text-xs font-semibold text-faint">${icon(glyph)}${label}</div>
+      <div class="flex flex-wrap items-center gap-2 text-sm font-semibold [overflow-wrap:anywhere]">${value}</div>
+    </div>`;
+
   return `
-    <div class="card now" style="margin-bottom:14px">
-      <div class="frame">${image}</div>
+    <div class="card enter relative grid gap-6 overflow-hidden md:grid-cols-[220px_minmax(0,1fr)]">
+      <div class="bg-brand pointer-events-none absolute -right-20 -top-24 size-64 rounded-full opacity-10 blur-3xl"></div>
       <div>
-        <div class="row" style="margin-bottom:10px">
-          <strong style="font-size:16px">${esc(d.name)}</strong>
-          ${d.enabled ? "" : `<span class="badge mute">disabled</span>`}
+        <div class="screen">${image}</div>
+      </div>
+      <div class="relative flex min-w-0 flex-col">
+        <div class="row mb-4">
+          <span class="live ${d.enabled ? "" : "off"}"></span>
+          <strong class="text-lg tracking-tight">${esc(d.name)}</strong>
+          ${d.enabled ? `<span class="badge ok">live</span>` : `<span class="badge mute">disabled</span>`}
           <div class="spacer"></div>
           <button class="btn small" data-apply-device="${esc(d.id)}">${icon("play")}Apply now</button>
         </div>
-        <dl class="kv">
-          <dt>Image</dt><dd>${esc(d.showing.filename ?? d.showing.assetName ?? "nothing")}</dd>
-          <dt>Sound</dt><dd>${sound}</dd>
-          <dt>Today</dt><dd>${esc(d.today.themeName ?? "none eligible")}</dd>
-          <dt>Because</dt><dd class="mono">${esc(d.today.reason)}</dd>
-          <dt>Last run</dt><dd>${outcome} <span style="color:var(--text-dim);font-weight:400">${last ? esc(new Date(last.at).toLocaleString()) : ""}</span></dd>
-          <dt>Themes</dt><dd>${d.themeCount} eligible to this doorbell</dd>
-        </dl>
+        <div class="text-xs font-semibold uppercase tracking-wider text-faint">Today's theme</div>
+        <div class="mt-1 text-3xl font-bold tracking-tight ${d.today.themeName ? "text-gradient" : "text-faint"}">${esc(d.today.themeName ?? "None eligible")}</div>
+        <div class="mt-1.5 font-mono text-xs text-dim">${esc(d.today.reason)}</div>
+        <div class="mt-5 grid gap-2.5 sm:grid-cols-2">
+          ${fact("image", "Image", esc(d.showing.filename ?? d.showing.assetName ?? "nothing"))}
+          ${fact("sound", "Ring sound", sound)}
+          ${fact("clock", "Last run", outcome)}
+          ${fact("layers", "Themes", `${d.themeCount} eligible here`)}
+        </div>
       </div>
     </div>`;
+}
+
+/** The four numbers across the top. */
+async function renderNowStats(fresh) {
+  const box = $("#now-stats");
+  if (!box.children.length) box.innerHTML = Array.from({ length: 4 }, () => `<div class="stat"><div class="sk h-3 w-24"></div><div class="sk mt-3 h-8 w-16"></div></div>`).join("");
+
+  const [themeList, stats] = await Promise.all([load("/api/themes", "now"), load("/api/stats?days=30", "now")]);
+  await loadSounds("now");
+  if (!fresh()) return;
+
+  const enabled = themeList.filter((t) => t.enabled).length;
+  const special = themeList.filter((t) => t.enabled && t.priority > 0).length;
+  const imagesUsed = new Set(themeList.map((t) => t.filename).filter(Boolean)).size;
+  const totals = stats.days.reduce(
+    (sum, d) => ({ changed: sum.changed + d.changed, runs: sum.runs + d.changed + d.unchanged + d.noTheme + d.failed, failed: sum.failed + d.failed }),
+    { changed: 0, runs: 0, failed: 0 },
+  );
+  const okRate = totals.runs ? Math.round(((totals.runs - totals.failed) / totals.runs) * 100) : null;
+  const slots = sounds.ringtones.length;
+
+  // Carry the old numbers over, so they count from there rather than zero.
+  const before = Object.fromEntries([...box.querySelectorAll("[data-count]")].map((el) => [el.dataset.key, el.textContent]));
+  const tile = (key, glyph, label, value, foot, extra = "") => `
+    <div class="stat">
+      <div class="label">${icon(glyph)}${label}</div>
+      <div class="value">${value === null ? "—" : `<span data-key="${key}" data-count="${value}" data-from="${Number(before[key] ?? 0)}">${Number(before[key] ?? 0)}</span>`}</div>
+      <div class="foot">${foot}</div>
+      ${extra}
+    </div>`;
+
+  box.innerHTML = [
+    tile("themes", "layers", "Themes enabled", enabled, `${themeList.length} in all · ${special} beat the rotation`),
+    tile("images", "image", "Images", state.counts.media, `${imagesUsed} used by a theme`),
+    sounds.unavailable
+      ? tile("sounds", "sound", "Ring sounds", null, "Needs Protect admin credentials")
+      : tile(
+          "sounds",
+          "sound",
+          "Ring sounds",
+          (sounds.library ?? []).length,
+          `${slots} of ${sounds.limit} doorbell slots used`,
+          `<div class="meter" title="${slots} of ${sounds.limit} slots">${Array.from({ length: sounds.limit }, (_, i) => `<i class="${i < slots ? "on" : ""}"></i>`).join("")}</div>`,
+        ),
+    tile(
+      "changes",
+      "activity",
+      "Changes, 30 days",
+      totals.changed,
+      okRate === null ? "Nothing has run yet" : `${totals.runs} runs · ${okRate}% without a failure`,
+    ),
+  ].join("");
+  countUp(box);
+}
+
+/** Stacked columns, one per day: what each run did. */
+async function renderNowActivity(fresh) {
+  const box = $("#now-activity");
+  if (!box.children.length) box.innerHTML = `<div class="sk h-44 w-full"></div>`;
+  const stats = await load("/api/stats?days=30", "now");
+  if (!fresh()) return;
+
+  const series = [
+    { key: "changed", ...OUTCOMES.applied },
+    { key: "unchanged", ...OUTCOMES.unchanged },
+    { key: "noTheme", ...OUTCOMES["no-theme"] },
+    { key: "failed", ...OUTCOMES.failed },
+  ];
+  $("#now-legend").innerHTML = series
+    .map((s) => `<span class="flex items-center gap-1.5"><i class="legend-key" style="background:var(${s.mark})"></i>${s.label}</span>`)
+    .join("");
+
+  const total = (d) => d.changed + d.unchanged + d.noTheme + d.failed;
+  const max = Math.max(1, ...stats.days.map(total));
+  if (stats.days.every((d) => total(d) === 0)) {
+    box.innerHTML = emptyState("Nothing has run yet", "Each daily change shows up here.", "activity");
+    return;
+  }
+
+  const label = (date, opts) => new Date(`${date}T12:00:00`).toLocaleDateString(undefined, opts);
+  const columns = stats.days
+    .map((d, i) => {
+      const segments = series
+        .filter((s) => d[s.key] > 0)
+        .map((s, j, shown) => {
+          const top = j === shown.length - 1;
+          return `<div class="chart-bar w-full ${top ? "rounded-t" : ""}" style="--i:${i};height:${(d[s.key] / max) * 100}%;background:var(${s.mark});${j > 0 ? "margin-bottom:2px" : ""}"></div>`;
+        })
+        .join("");
+      return `<div class="chart-col group relative flex h-full flex-1 cursor-default justify-center" data-day="${i}">
+          <div class="chart-hit absolute inset-x-0 -bottom-1 top-0 rounded-md transition-colors"></div>
+          <div class="relative flex h-full w-full max-w-6 flex-col-reverse">${segments}</div>
+        </div>`;
+    })
+    .join("");
+
+  box.innerHTML = `
+    <div class="relative mt-6">
+      <div class="absolute inset-x-0 top-0 border-t border-line"></div>
+      <span class="absolute -top-5 right-0 text-[10.5px] tabular-nums text-faint">${max} run${max === 1 ? "" : "s"}</span>
+      <div class="flex h-40 items-end gap-[2px] border-b border-line-strong pt-px" id="activity-cols">${columns}</div>
+      <div class="mt-1.5 flex justify-between text-[11px] text-faint">
+        <span>${label(stats.days[0].date, { day: "numeric", month: "short" })}</span>
+        <span>${label(stats.days[Math.floor(stats.days.length / 2)].date, { day: "numeric", month: "short" })}</span>
+        <span>Today</span>
+      </div>
+      <div class="pointer-events-none absolute z-10 hidden min-w-36 rounded-xl border border-line bg-surface p-2.5 text-xs shadow-lift" id="activity-tip"></div>
+    </div>`;
+
+  // One tooltip, moved to whichever day is under the pointer.
+  const tip = $("#activity-tip");
+  const cols = $("#activity-cols");
+  cols.addEventListener("pointerover", (event) => {
+    const col = event.target.closest("[data-day]");
+    if (!col) return;
+    const d = stats.days[Number(col.dataset.day)];
+    tip.innerHTML =
+      `<div class="mb-1.5 font-semibold">${label(d.date, { weekday: "short", day: "numeric", month: "short" })}</div>` +
+      (total(d) === 0
+        ? `<div class="text-faint">No runs</div>`
+        : series
+            .filter((s) => d[s.key] > 0)
+            .map((s) => `<div class="flex items-center gap-2"><i class="legend-key" style="background:var(${s.mark})"></i>${s.label}<span class="ml-auto pl-3 font-semibold tabular-nums">${d[s.key]}</span></div>`)
+            .join(""));
+    tip.hidden = false;
+    tip.classList.remove("hidden");
+    const x = col.offsetLeft + col.offsetWidth / 2;
+    tip.style.left = `${clamp(x - tip.offsetWidth / 2, 0, cols.offsetWidth - tip.offsetWidth)}px`;
+    tip.style.bottom = "calc(100% - 8px)";
+  });
+  cols.addEventListener("pointerleave", () => tip.classList.add("hidden"));
+
+  // Most shown, from the same numbers.
+  const themeList = await load("/api/themes", "now");
+  if (!fresh()) return;
+  const top = stats.themes.slice(0, 5);
+  const most = Math.max(1, ...top.map((t) => t.count));
+  $("#now-top").innerHTML = top.length
+    ? `<div class="stagger grid gap-4">${top
+        .map((t, i) => {
+          const file = themeList.find((x) => x.id === t.themeId)?.filename;
+          return `<div class="flex items-center gap-3">
+            ${file ? `<img class="size-10 shrink-0 rounded-lg object-cover" loading="lazy" alt="" src="/thumb/${encodeURIComponent(file)}">` : `<div class="size-10 shrink-0 rounded-lg bg-surface-2"></div>`}
+            <div class="min-w-0 flex-1">
+              <div class="flex items-baseline gap-2 text-sm"><span class="truncate font-semibold">${esc(t.name)}</span><span class="ml-auto shrink-0 text-xs tabular-nums text-dim">${t.count} run${t.count === 1 ? "" : "s"}</span></div>
+              <div class="mt-1.5 h-2 rounded-full bg-surface-2"><div class="hbar" style="--i:${i};width:${(t.count / most) * 100}%"></div></div>
+            </div>
+          </div>`;
+        })
+        .join("")}</div>`
+    : emptyState("Nothing yet", "Themes appear here once they have been on the doorbell.", "layers");
+}
+
+/** The next fortnight, as a strip of days. */
+async function renderNowUpcoming(fresh) {
+  const box = $("#now-upcoming");
+  if (!box.children.length) box.innerHTML = Array.from({ length: 7 }, () => `<div class="sk h-36 w-28 shrink-0 !rounded-2xl"></div>`).join("");
+  const device = state.doorbells[0]?.id;
+  const { days } = await load(`/api/calendar?days=14${device ? `&device=${encodeURIComponent(device)}` : ""}`, "now");
+  if (!fresh()) return;
+  box.innerHTML = days
+    .map((d, i) => {
+      const date = new Date(`${d.date}T12:00:00`);
+      const changes = i > 0 && d.themeId !== days[i - 1].themeId;
+      return `<div class="enter flex w-28 shrink-0 flex-col items-center gap-2 rounded-2xl border p-2.5 text-center transition-transform duration-200 hover:-translate-y-1
+          ${i === 0 ? "border-accent bg-accent-soft" : d.priority > 0 ? "border-accent/50 bg-surface" : "border-line bg-surface"}" style="animation-delay:${i * 30}ms"
+          title="${esc(d.date)}${d.themeName ? ` — ${esc(d.themeName)}` : ""}">
+        <div class="text-[11px] font-semibold uppercase tracking-wider ${i === 0 ? "text-accent" : "text-faint"}">${i === 0 ? "Today" : date.toLocaleDateString(undefined, { weekday: "short" })} <span class="tabular-nums">${date.getDate()}</span></div>
+        ${d.filename ? `<img class="size-16 rounded-xl object-cover" loading="lazy" alt="" src="/thumb/${encodeURIComponent(d.filename)}">` : `<div class="size-16 rounded-xl bg-surface-2"></div>`}
+        <div class="line-clamp-2 text-[11.5px] font-medium leading-tight ${d.themeId ? "" : "text-faint"}">${esc(d.themeName ?? "—")}</div>
+        ${changes ? `<span class="badge accent plain !px-1.5 !text-[10px]">changes</span>` : ""}
+      </div>`;
+    })
+    .join("");
+}
+
+/** The last few runs, newest first. */
+async function renderNowRecent(fresh) {
+  const box = $("#now-recent");
+  if (!box.children.length) box.innerHTML = skLines(5);
+  const [rows, themeList] = await Promise.all([load("/api/applies?limit=6", "now"), load("/api/themes", "now")]);
+  if (!fresh()) return;
+  const nameOf = themeNamer(themeList);
+  box.innerHTML = rows.length
+    ? `<ol class="stagger grid gap-3.5">${rows
+        .map((r) => {
+          const o = outcomeOf(r.outcome);
+          return `<li class="flex gap-3">
+            <span class="feed-dot" style="background:var(${o.mark})"></span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 text-sm"><span class="truncate font-semibold">${esc(nameOf(r.themeId))}</span><span class="badge ${o.badge} ml-auto shrink-0">${esc(o.label)}</span></div>
+              <div class="truncate text-xs text-faint" title="${esc(r.reason)}">${esc(r.deviceName ?? "")}${r.deviceName ? " · " : ""}${esc(ago(r.at))}</div>
+            </div>
+          </li>`;
+        })
+        .join("")}</ol>`
+    : emptyState("No runs yet", "The first daily change appears here.", "clock");
+}
+
+/** A theme's name from its id, which is what the history records; the id if it has since gone. */
+const themeNamer = (list) => {
+  const names = new Map(list.map((t) => [t.id, t.name]));
+  return (id) => (id ? names.get(id) ?? id : "No theme");
+};
+
+/** The signed-in name and what Doorman is connected to, in the sidebar. */
+function showIdentity() {
+  $("#version").textContent = `v${state.version}`;
+  if (state.username) {
+    for (const id of ["#who", "#who-side"]) $(id).textContent = state.username;
+    for (const id of ["#avatar", "#avatar-big"]) $(id).textContent = state.username.slice(0, 1);
+  }
+  $("#status-title").textContent = state.protectVersion ? "Connected" : "Protect unreachable";
+  $("#status-live").className = `live ${state.protectVersion ? "" : "off"}`;
+  $("#status-lines").innerHTML = [
+    state.protectVersion ? `UniFi Protect ${esc(state.protectVersion)}` : null,
+    `${state.counts.devices} doorbell${state.counts.devices === 1 ? "" : "s"}`,
+    state.soundEnabled ? "Ring sounds on" : "Ring sounds off — no admin login",
+  ]
+    .filter(Boolean)
+    .map((line) => `<div>${line}</div>`)
+    .join("");
 }
 
 /** Summarise an apply that may have covered several doorbells. */
@@ -469,8 +915,8 @@ function reportApplies(results) {
   }
 }
 
-const emptyState = (title, body) =>
-  `<div class="empty-state"><strong>${esc(title)}</strong>${esc(body)}</div>`;
+const emptyState = (title, body, glyph = "spark") =>
+  `<div class="empty-state enter"><div class="art">${icon(glyph)}</div><strong>${esc(title)}</strong>${esc(body)}</div>`;
 
 /**
  * Swap a poster frame for the real GIF on hover.
@@ -494,7 +940,7 @@ document.addEventListener(
 );
 
 $("#apply-now").addEventListener("click", (e) =>
-  withBusy(e.target, async () => {
+  withBusy(e.currentTarget, async () => {
     const { results } = await api("/api/apply", { method: "POST" });
     reportApplies(results);
     await renderNow();
@@ -502,7 +948,7 @@ $("#apply-now").addEventListener("click", (e) =>
 );
 
 $("#dry-run").addEventListener("click", (e) =>
-  withBusy(e.target, async () => {
+  withBusy(e.currentTarget, async () => {
     const { results } = await api("/api/apply?dryRun=true", { method: "POST" });
     for (const r of results) {
       toast(`${r.deviceName ? `${r.deviceName}: ` : ""}${r.outcome} — ${r.reason}`);
@@ -546,26 +992,26 @@ async function renderSettings() {
             const scoped = themeList.filter((t) => t.devices.includes(d.id)).length;
             const all = themeList.filter((t) => t.devices.length === 0).length;
             return `
-            <div class="theme ${d.enabled ? "" : "off"}">
-              <div class="noimg device-glyph">${icon("bell")}</div>
-              <div>
-                <div class="name">
+            <div class="enter flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-surface-2/50 p-4 ${d.enabled ? "" : "opacity-60"}">
+              <div class="grid size-12 shrink-0 place-items-center rounded-2xl ${d.enabled ? "bg-brand text-white" : "bg-surface-3 text-dim"}">${icon("bell")}</div>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 font-semibold">
                   ${esc(d.name)}
-                  ${d.enabled ? "" : `<span class="badge mute">disabled</span>`}
+                  ${d.enabled ? `<span class="badge ok">live</span>` : `<span class="badge mute">disabled</span>`}
                 </div>
-                <div class="meta mono">${esc(d.id)}</div>
-                <div class="meta">${all + scoped} themes apply here${scoped > 0 ? ` (${scoped} only here)` : ""}</div>
+                <div class="truncate font-mono text-xs text-faint">${esc(d.id)}</div>
+                <div class="mt-0.5 text-[13px] text-dim">${all + scoped} themes apply here${scoped > 0 ? ` (${scoped} only here)` : ""}</div>
               </div>
               <div class="row">
+                <label class="switch" title="${d.enabled ? "Disable" : "Enable"}"><input type="checkbox" data-toggle-device="${esc(d.id)}" ${d.enabled ? "checked" : ""} aria-label="Enabled"></label>
                 <button class="btn small" data-rename="${esc(d.id)}">${icon("edit")}Rename</button>
-                <button class="btn small" data-toggle-device="${esc(d.id)}">${icon("power")}${d.enabled ? "Disable" : "Enable"}</button>
-                <button class="btn small danger" data-remove-device="${esc(d.id)}">${icon("trash")}Remove</button>
+                <button class="btn small danger icon" data-remove-device="${esc(d.id)}" title="Remove" aria-label="Remove">${icon("trash")}</button>
               </div>
             </div>`;
           })
           .join("");
 
-  $("#selection").value = settings.selection;
+  for (const radio of $$('#selection input[name="selection"]')) radio.checked = radio.value === settings.selection;
 
   $("#roll-hour").innerHTML = Array.from({ length: 24 }, (_, h) => {
     const label = `${String(h).padStart(2, "0")}:00`;
@@ -592,7 +1038,12 @@ function wireDeviceButtons() {
   $$("[data-rename]").forEach((b) =>
     b.addEventListener("click", async () => {
       const device = devices.find((d) => d.id === b.dataset.rename);
-      const name = prompt(`What should this doorbell be called?`, device.name);
+      const name = await ask({
+        title: "Rename doorbell",
+        input: { label: "Name", value: device.name },
+        ok: "Rename",
+        icon: "edit",
+      });
       if (name === null || name.trim() === device.name) return;
       try {
         await api("/api/devices", {
@@ -608,9 +1059,10 @@ function wireDeviceButtons() {
   );
 
   $$("[data-toggle-device]").forEach((b) =>
-    b.addEventListener("click", (e) =>
-      withBusy(e.target, async () => {
-        const device = devices.find((d) => d.id === b.dataset.toggleDevice);
+    b.addEventListener("change", async () => {
+      const device = devices.find((d) => d.id === b.dataset.toggleDevice);
+      b.disabled = true;
+      try {
         await api("/api/devices", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -619,21 +1071,24 @@ function wireDeviceButtons() {
         // A disabled doorbell keeps its themes and history; it is just
         // skipped by the scheduler.
         toast(`${device.name} ${device.enabled ? "disabled" : "enabled"}.`, "ok");
-        await renderSettings();
-      }),
-    ),
+      } catch (error) {
+        toast(error.message, "bad");
+      }
+      await renderSettings();
+    }),
   );
 
   $$("[data-remove-device]").forEach((b) =>
     b.addEventListener("click", async () => {
       const device = devices.find((d) => d.id === b.dataset.removeDevice);
-      if (
-        !confirm(
-          `Remove "${device.name}"?\n\nIts themes and history are kept. Any theme that applies ONLY to this doorbell will be disabled rather than spread to the others.`,
-        )
-      ) {
-        return;
-      }
+      const sure = await ask({
+        title: `Remove ${device.name}?`,
+        body: "Its themes and history are kept. Any theme that applies only to this doorbell is disabled rather than spread to the others.",
+        ok: "Remove",
+        danger: true,
+        icon: "trash",
+      });
+      if (!sure) return;
       try {
         const result = await api(`/api/devices?id=${encodeURIComponent(device.id)}`, {
           method: "DELETE",
@@ -653,35 +1108,30 @@ function wireDeviceButtons() {
 }
 
 $("#add-doorbell").addEventListener("click", (e) =>
-  withBusy(e.target, async () => {
+  withBusy(e.currentTarget, async () => {
     const found = await api("/api/devices/discover");
     if (found.length === 0) {
       toast("No other camera on the controller can display a welcome image.", "bad");
       return;
     }
-    // A prompt rather than a dialog: this is a once-or-twice-ever action,
-    // and the list is short because it excludes doorbells already added.
-    const choice = prompt(
-      `Cameras that can show a welcome image:\n\n${found
-        .map((c, i) => `${i + 1}. ${c.name} (${c.type})`)
-        .join("\n")}\n\nWhich number?`,
-      "1",
-    );
-    if (choice === null) return;
-    const picked = found[Number(choice) - 1];
-    if (!picked) {
-      toast("No camera with that number.", "bad");
-      return;
-    }
-    const name = prompt("What should it be called?", picked.name);
-    if (name === null || !name.trim()) return;
+    // The list is short: it leaves out doorbells already added.
+    const answer = await ask({
+      title: "Add a doorbell",
+      body: "Cameras on the controller that can show a welcome image.",
+      choices: found.map((c) => ({ label: c.name, hint: c.type, camera: c })),
+      onChoice: (c) => c.camera.name,
+      input: { label: "Call it" },
+      ok: "Add doorbell",
+      icon: "bell",
+    });
+    if (!answer) return;
 
     await api("/api/devices", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: picked.id, name: name.trim(), enabled: true }),
+      body: JSON.stringify({ id: answer.choice.camera.id, name: answer.text, enabled: true }),
     });
-    toast(`Added ${name.trim()}.`, "ok");
+    toast(`Added ${answer.text}.`, "ok");
     await renderSettings();
   }),
 );
@@ -689,6 +1139,7 @@ $("#add-doorbell").addEventListener("click", (e) =>
 $("#selection").addEventListener("change", (e) =>
   saveSetting({ selection: e.target.value }, `Selection is now ${e.target.value}.`),
 );
+
 $("#roll-hour").addEventListener("change", (e) =>
   saveSetting(
     { rollHour: Number(e.target.value) },
@@ -718,6 +1169,8 @@ $("#toggle-theme").addEventListener("click", () => {
     (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   const next = current === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
+  // The waveform is a canvas, drawn in the colours of the moment.
+  if (!$("#sound-edit").hidden) drawWave();
   try {
     localStorage.setItem(THEME_KEY, next);
   } catch {
@@ -727,9 +1180,12 @@ $("#toggle-theme").addEventListener("click", () => {
 
 // ------------------------------------------------------------------ themes
 
+/** What the Themes tab is narrowed to: some text, and all / enabled / disabled. */
+const themeView = { text: "", filter: "all" };
+
 async function renderThemes() {
   const fresh = ticket("themes");
-  $("#themes-list").innerHTML = skeletonRows(4);
+  if (!themes.length) $("#themes-list").innerHTML = skeletonRows(4);
 
   [themes, media, devices] = await Promise.all([
     load("/api/themes", "themes"),
@@ -738,63 +1194,71 @@ async function renderThemes() {
   ]);
   await loadSounds("themes");
   if (!fresh()) return;
+  drawThemes();
+}
 
+function drawThemes() {
   if (themes.length === 0) {
-    $("#themes-list").innerHTML = emptyState(
+    $("#themes-list").innerHTML = `<div class="card md:col-span-2 2xl:col-span-3">${emptyState(
       "No themes yet",
-      "Without one the scheduler leaves the doorbell alone.",
-    );
+      "Without one the scheduler leaves the doorbell alone. Start with New theme.",
+      "layers",
+    )}</div>`;
     return;
   }
 
-  const sorted = [...themes].sort(
-    (a, b) => b.priority - a.priority || a.name.localeCompare(b.name),
-  );
+  const text = themeView.text.toLowerCase();
+  const sorted = [...themes]
+    .filter((t) => themeView.filter === "all" || (themeView.filter === "on") === t.enabled)
+    .filter((t) => !text || `${t.name} ${t.id} ${t.filename ?? ""}`.toLowerCase().includes(text))
+    .sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
+
+  if (sorted.length === 0) {
+    $("#themes-list").innerHTML = `<div class="card md:col-span-2 2xl:col-span-3">${emptyState("No matches", "Nothing fits that search or filter.", "search")}</div>`;
+    return;
+  }
 
   $("#themes-list").innerHTML = sorted
-    .map((theme) => {
-      const sound = sounds.ringtones.find((r) => r.id === theme.sound);
+    .map((theme, i) => {
+      const sound = (sounds.library ?? []).find((l) => l.ref === theme.sound) ?? sounds.ringtones.find((r) => r.id === theme.sound);
       const thumb = theme.filename
-        ? `<img loading="lazy" alt="" src="/thumb/${encodeURIComponent(theme.filename)}"
+        ? `<img class="size-full object-cover" loading="lazy" alt="" src="/thumb/${encodeURIComponent(theme.filename)}"
                 data-animate="/media/${encodeURIComponent(theme.filename)}">`
-        : `<div class="noimg">missing</div>`;
+        : `<div class="grid size-full place-items-center text-[11px] text-bad">missing</div>`;
+      const soundLine = sound
+        ? esc(sound.name)
+        : theme.soundMissing
+          ? `<span class="text-bad">missing${theme.soundName ? `: ${esc(theme.soundName)}` : ""}</span>`
+          : theme.sound
+            ? esc(theme.soundName ?? "sound set")
+            : `<span class="text-faint">default sound</span>`;
+      const where =
+        devices.length > 1
+          ? theme.devices.length === 0
+            ? "all doorbells"
+            : theme.devices.map((id) => devices.find((d) => d.id === id)?.name ?? id).join(", ")
+          : null;
       return `
-      <div class="theme ${theme.enabled ? "" : "off"}">
-        ${thumb}
-        <div>
-          <div class="name">
-            ${esc(theme.name)}
-            ${theme.priority > 0 ? `<span class="badge mute">priority ${theme.priority}</span>` : ""}
-            ${theme.enabled ? "" : `<span class="badge mute">disabled</span>`}
-            ${theme.missing ? `<span class="badge bad">image missing</span>` : ""}
+      <div class="tile enter !flex-row gap-4 p-4 ${theme.enabled ? "" : "opacity-60"}" style="animation-delay:${Math.min(i, 12) * 35}ms">
+        <div class="size-20 shrink-0 overflow-hidden rounded-xl bg-surface-2">${thumb}</div>
+        <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+          <div class="flex items-start gap-2">
+            <div class="min-w-0 flex-1">
+              <div class="truncate font-semibold">${esc(theme.name)}</div>
+              <div class="flex flex-wrap gap-1.5 pt-1">
+                ${theme.priority > 0 ? `<span class="badge accent">priority ${theme.priority}</span>` : ""}
+                ${theme.missing ? `<span class="badge bad">image missing</span>` : ""}
+              </div>
+            </div>
+            <label class="switch" title="${theme.enabled ? "Enabled" : "Disabled"}"><input type="checkbox" data-toggle-theme="${esc(theme.id)}" ${theme.enabled ? "checked" : ""} aria-label="Enabled"></label>
           </div>
-          <div class="meta">
-            ${esc(theme.rules.map(describeRule).join("  or  "))}
-            · ${
-              sound
-                ? esc(sound.name)
-                : theme.soundMissing
-                  ? `<span style="color:var(--bad)">sound missing${theme.soundName ? `: ${esc(theme.soundName)}` : ""}</span>`
-                  : theme.sound
-                    ? esc(theme.soundName ?? "sound set")
-                    : "default sound"
-            }
-            ${
-              devices.length > 1
-                ? ` · ${
-                    theme.devices.length === 0
-                      ? "all doorbells"
-                      : esc(
-                          theme.devices
-                            .map((id) => devices.find((d) => d.id === id)?.name ?? id)
-                            .join(", "),
-                        )
-                  }`
-                : ""
-            }
+          <div class="flex flex-wrap gap-1">${theme.rules.map((r) => `<span class="chip">${icon("calendar")}${esc(describeRule(r))}</span>`).join("")}</div>
+          <div class="flex items-center gap-1.5 text-xs text-dim">${icon("sound")}<span class="truncate">${soundLine}</span></div>
+          ${where ? `<div class="flex items-center gap-1.5 text-xs text-dim">${icon("bell")}<span class="truncate">${esc(where)}</span></div>` : ""}
+          <div class="mt-auto flex justify-end pt-1">
+            <button class="btn small" data-edit="${esc(theme.id)}">${icon("edit")}Edit</button>
           </div>
         </div>
-        <button class="btn small" data-edit="${esc(theme.id)}">${icon("edit")}Edit</button>
       </div>`;
     })
     .join("");
@@ -802,7 +1266,55 @@ async function renderThemes() {
   $$("[data-edit]").forEach((b) =>
     b.addEventListener("click", () => openTheme(themes.find((t) => t.id === b.dataset.edit))),
   );
+
+  // Straight from the card, without opening the editor.
+  $$("[data-toggle-theme]").forEach((input) =>
+    input.addEventListener("change", async () => {
+      const theme = themes.find((t) => t.id === input.dataset.toggleTheme);
+      input.disabled = true;
+      try {
+        await api("/api/themes", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: theme.id,
+            name: theme.name,
+            image: theme.image,
+            devices: theme.devices,
+            sound: theme.sound,
+            priority: theme.priority,
+            enabled: input.checked,
+            rules: theme.rules,
+          }),
+        });
+        toast(`${theme.name} ${input.checked ? "enabled" : "disabled"}.`, "ok");
+      } catch (error) {
+        toast(error.message, "bad");
+      }
+      await renderThemes();
+    }),
+  );
 }
+
+$("#themes-search").addEventListener("input", (e) => {
+  themeView.text = e.target.value.trim();
+  drawThemes();
+});
+
+/** A strip of filter buttons: press one, the others let go, `onPick` redraws. */
+function segmented(selector, onPick) {
+  $(selector).addEventListener("click", (event) => {
+    const button = event.target.closest("[data-filter]");
+    if (!button) return;
+    for (const b of $(selector).querySelectorAll("[data-filter]")) b.setAttribute("aria-pressed", String(b === button));
+    onPick(button.dataset.filter);
+  });
+}
+
+segmented("#themes-filter", (filter) => {
+  themeView.filter = filter;
+  drawThemes();
+});
 
 $("#new-theme").addEventListener("click", () => openTheme(null));
 
@@ -836,8 +1348,8 @@ function ruleRow(rule = {}) {
         <input type="time" class="r-tto" value="${esc(rule.timeOfDay?.to ?? "")}" style="flex:1">
       </div>
     </label>
-    <div class="row end" style="margin-top:9px">
-      <button type="button" class="btn small danger r-del">Remove window</button>
+    <div class="row end mt-3">
+      <button type="button" class="btn small danger r-del">${icon("trash")}Remove window</button>
     </div>
   </div>`;
 }
@@ -874,6 +1386,7 @@ function openTheme(theme) {
     .join("");
 
   $("#f-sound").innerHTML = `<option value="">Default ring sound</option>` + soundOptions(theme?.sound);
+  previewThemeImage();
 
   // Only worth showing with more than one doorbell; with one it is noise
   // and the empty default already means "that one".
@@ -892,6 +1405,15 @@ function openTheme(theme) {
   // this the first thing typed goes nowhere.
   $("#f-name").focus();
 }
+
+/** The chosen image, large, beside the form - a filename says little. */
+function previewThemeImage() {
+  const file = $("#f-image").value;
+  $("#f-image-preview").innerHTML = file
+    ? `<img class="enter" alt="" src="/media/${encodeURIComponent(file)}">`
+    : `<div class="grid size-full place-items-center text-xs text-faint">No image</div>`;
+}
+$("#f-image").addEventListener("change", previewThemeImage);
 
 $("#add-rule").addEventListener("click", () => {
   $("#f-rules").insertAdjacentHTML("beforeend", ruleRow());
@@ -958,8 +1480,15 @@ $("#theme-form").addEventListener("submit", async (event) => {
 
 $("#delete-theme").addEventListener("click", async () => {
   if (!editing) return;
-  // Deliberately a confirm: it is destructive, instant and not undoable.
-  if (!confirm(`Delete the theme "${editing.name}"? The GIF itself is kept.`)) return;
+  // Deliberately asked: it is destructive, instant and not undoable.
+  const sure = await ask({
+    title: `Delete ${editing.name}?`,
+    body: "The theme goes for good. The GIF and sound stay in the library.",
+    ok: "Delete theme",
+    danger: true,
+    icon: "trash",
+  });
+  if (!sure) return;
   try {
     await api(`/api/themes?id=${encodeURIComponent(editing.id)}`, { method: "DELETE" });
     $("#theme-dialog").close();
@@ -972,42 +1501,65 @@ $("#delete-theme").addEventListener("click", async () => {
 
 // ------------------------------------------------------------------- media
 
+const mediaView = { text: "", filter: "all" };
+
 async function renderMedia() {
   const fresh = ticket("media");
   // The slowest tab by far - ffprobe decodes every frame of every GIF to
   // count them. Tiles the right shape keep the layout from jumping.
-  $("#media-grid").innerHTML = skeletonTiles(10);
+  if (!media.length) $("#media-grid").innerHTML = skeletonTiles(10);
 
   media = await load("/api/media", "media");
   if (!fresh()) return;
-  if (media.length === 0) {
-    $("#media-grid").innerHTML = emptyState("No images yet", "Upload a GIF to get started.");
+  drawMedia();
+}
+
+function drawMedia() {
+  const total = media.length;
+  const text = mediaView.text.toLowerCase();
+  const shown = media
+    .filter((m) =>
+      mediaView.filter === "used" ? m.inUse
+      : mediaView.filter === "unused" ? !m.inUse
+      : mediaView.filter === "problem" ? m.verdict !== "safe"
+      : true,
+    )
+    .filter((m) => !text || m.filename.toLowerCase().includes(text));
+  $("#media-count").textContent = total ? `${shown.length === total ? total : `${shown.length} of ${total}`} images` : "";
+
+  if (total === 0) {
+    $("#media-grid").innerHTML = `<div class="card col-span-full">${emptyState("No images yet", "Upload a GIF, or use Find a GIF to search for one.", "image")}</div>`;
+    return;
+  }
+  if (shown.length === 0) {
+    $("#media-grid").innerHTML = `<div class="card col-span-full">${emptyState("No matches", "Nothing fits that search or filter.", "search")}</div>`;
     return;
   }
 
-  $("#media-grid").innerHTML = media
-    .map((m) => {
+  $("#media-grid").innerHTML = shown
+    .map((m, i) => {
       const [kind, label] = VERDICT[m.verdict] ?? ["mute", "unreadable"];
       return `
-      <div class="tile">
+      <div class="tile enter" style="animation-delay:${Math.min(i, 16) * 25}ms">
         <div class="thumb">
           <img loading="lazy" alt="" src="/thumb/${encodeURIComponent(m.filename)}"
                data-animate="/media/${encodeURIComponent(m.filename)}">
-          <span class="play" aria-hidden="true">▶</span>
+          <span class="play" aria-hidden="true">▶ GIF</span>
+          ${m.inUse ? `<span class="badge ok absolute left-2 top-2 shadow-soft">in use</span>` : ""}
         </div>
-        <div class="body">
-          <div class="fname" title="${esc(m.filename)}">${esc(m.filename)}</div>
+        <div class="flex flex-1 flex-col gap-2 p-3">
+          <div class="truncate text-[13px] font-semibold" title="${esc(m.filename)}">${esc(m.filename)}</div>
           <div class="facts">
             <span class="badge ${kind}">${esc(label)}</span>
             ${m.frames ? `<span>${m.frames} frames</span>` : ""}
             <span>${kb(m.bytes)}</span>
           </div>
-          ${m.inUse ? `<div class="facts"><span class="badge mute">used by a theme</span></div>` : ""}
-          ${m.verdict && m.verdict !== "safe" ? `<div class="facts" style="font-size:11.5px">${esc(m.advice ?? "")}</div>` : ""}
-          <div class="acts">
+          ${m.verdict && m.verdict !== "safe" ? `<div class="text-[11.5px] text-dim">${esc(m.advice ?? "")}</div>` : ""}
+          <div class="mt-auto flex flex-wrap gap-1.5 pt-1">
             ${m.verdict === "likely-fails" ? `<button class="btn small" data-fit="${esc(m.filename)}">${icon("shrink")}Shrink</button>` : ""}
             <button class="btn small" data-crop="${esc(m.filename)}" title="Crop and trim into a new copy">${icon("crop")}Crop</button>
-            <button class="btn small danger" data-del-media="${esc(m.filename)}" ${m.inUse ? "disabled title='Used by a theme'" : ""}>${icon("trash")}Delete</button>
+            <div class="spacer"></div>
+            <button class="btn small danger icon" data-del-media="${esc(m.filename)}" aria-label="Delete" ${m.inUse ? "disabled title='Used by a theme'" : "title='Delete'"}>${icon("trash")}</button>
           </div>
         </div>
       </div>`;
@@ -1016,7 +1568,7 @@ async function renderMedia() {
 
   $$("[data-fit]").forEach((b) =>
     b.addEventListener("click", (e) =>
-      withBusy(e.target, async () => {
+      withBusy(e.currentTarget, async () => {
         const result = await api(`/api/media/fit?filename=${encodeURIComponent(b.dataset.fit)}`, {
           method: "POST",
         });
@@ -1034,7 +1586,14 @@ async function renderMedia() {
 
   $$("[data-del-media]").forEach((b) =>
     b.addEventListener("click", async () => {
-      if (!confirm(`Delete ${b.dataset.delMedia} from the library?`)) return;
+      const sure = await ask({
+        title: `Delete ${b.dataset.delMedia}?`,
+        body: "It is removed from the library for good.",
+        ok: "Delete",
+        danger: true,
+        icon: "trash",
+      });
+      if (!sure) return;
       try {
         await api(`/api/media?filename=${encodeURIComponent(b.dataset.delMedia)}`, { method: "DELETE" });
         toast("Deleted.", "ok");
@@ -1046,9 +1605,16 @@ async function renderMedia() {
   );
 }
 
-$("#upload-gif").addEventListener("change", async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
+$("#media-search").addEventListener("input", (e) => {
+  mediaView.text = e.target.value.trim();
+  drawMedia();
+});
+segmented("#media-filter", (filter) => {
+  mediaView.filter = filter;
+  drawMedia();
+});
+
+async function uploadGif(file) {
   const form = new FormData();
   form.append("file", file);
   try {
@@ -1062,9 +1628,14 @@ $("#upload-gif").addEventListener("change", async (event) => {
     await renderMedia();
   } catch (error) {
     toast(error.message, "bad");
-  } finally {
-    event.target.value = "";
   }
+}
+
+$("#upload-gif").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  await uploadGif(file);
+  event.target.value = "";
 });
 
 // ------------------------------------------------------------------ sounds
@@ -1103,17 +1674,18 @@ async function loadSounds(tab = "sounds") {
 
 async function renderSounds() {
   const fresh = ticket("sounds");
-  $("#sounds-list").innerHTML = skeletonRows(5);
+  if (!$("#sounds-list").children.length) $("#sounds-list").innerHTML = `<div class="grid gap-3">${skeletonRows(4)}</div>`;
 
   await loadSounds();
   if (!fresh()) return;
   // Nowhere to put a sound without admin credentials.
   $("#find-sound").hidden = Boolean(sounds.unavailable);
   if (sounds.unavailable) {
-    $("#sounds-list").innerHTML = emptyState(
+    $("#sounds-list").innerHTML = `<div class="card">${emptyState(
       "Ring sounds are unavailable",
       "They need PROTECT_ADMIN_USER and PROTECT_ADMIN_PASS. Welcome images work without them.",
-    );
+      "sound",
+    )}</div>`;
     return;
   }
 
@@ -1121,19 +1693,19 @@ async function renderSounds() {
     .map(
       (r) => `
       <tr>
-        <td><strong>${esc(r.name)}</strong>
+        <td><div class="flex flex-wrap items-center gap-2"><strong class="font-semibold">${esc(r.name)}</strong>
           ${r.isDefault ? `<span class="badge mute">stock</span>` : ""}
-          ${r.managed ? `<span class="badge mute" title="Doorman may remove this to make room, and put it back when a theme needs it">from the library</span>` : ""}
+          ${r.managed ? `<span class="badge accent" title="Doorman may remove this to make room, and put it back when a theme needs it">from the library</span>` : ""}
           ${
             r.noCopy
               ? `<span class="badge warn" title="Protect cannot hand this sound back, so Doorman never removes it and it holds a slot for good. Add the original file to the library under the name &quot;${esc(r.name)}&quot; and Doorman will manage it.">no copy in the library</span>`
               : ""
-          }</td>
-        <td class="mono">${esc(r.id)}</td>
-        <td>${r.inUse ? `<span class="badge ok">in use</span>` : ""}</td>
-        <td style="text-align:right">
+          }
+          ${r.inUse ? `<span class="badge ok">in use</span>` : ""}</div></td>
+        <td class="mono max-md:hidden">${esc(r.id)}</td>
+        <td class="text-right whitespace-nowrap">
           ${r.noCopy ? `<button class="btn small" data-replace-sound="${esc(r.id)}" data-name="${esc(r.name)}" title="Find this sound again and keep it in the library">${icon("add")}Replace…</button>` : ""}
-          ${r.isDefault ? "" : `<button class="btn small danger" data-del-sound="${esc(r.id)}" data-name="${esc(r.name)}" data-managed="${r.managed ? "1" : ""}">${icon("trash")}Delete</button>`}
+          ${r.isDefault ? "" : `<button class="btn small danger icon" data-del-sound="${esc(r.id)}" data-name="${esc(r.name)}" data-managed="${r.managed ? "1" : ""}" title="${r.managed ? "Remove from the doorbell" : "Delete"}" aria-label="Delete">${icon("trash")}</button>`}
         </td>
       </tr>`,
     )
@@ -1156,80 +1728,92 @@ async function renderSounds() {
 
   const libraryRows = (sounds.library ?? [])
     .map(
-      (l) => `
-      <tr>
-        <td class="lib-name"><strong>${esc(l.name)}</strong></td>
-        <td>${
-          l.onDoorbell
-            ? `<span class="badge ok">on the doorbell</span>`
-            : `<span class="badge mute" title="Uploaded automatically when a theme needs it">uploaded when needed</span>`
-        } ${l.inUse ? `<span class="badge ok">in use</span>` : ""}</td>
-        <td style="color:var(--text-dim)">${kb(l.bytes)}</td>
-        <td style="text-align:right; white-space:nowrap">
-          <button class="btn small" data-listen-lib="${esc(l.hash)}" aria-label="Listen to ${esc(l.name)}">${icon("play")}</button>
+      (l, i) => `
+      <div data-lib-row class="enter flex flex-wrap items-center gap-3 border-t border-line px-5 py-3 first:border-t-0" style="animation-delay:${Math.min(i, 12) * 25}ms">
+        <button class="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border-0 text-white shadow-soft transition-transform hover:scale-105 active:scale-95 bg-brand"
+                data-listen-lib="${esc(l.hash)}" aria-label="Listen to ${esc(l.name)}">${icon("play")}</button>
+        <div class="lib-name min-w-0 flex-1">
+          <div class="truncate font-semibold">${esc(l.name)}</div>
+          <div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-faint">
+            ${
+              l.onDoorbell
+                ? `<span class="badge ok">on the doorbell</span>`
+                : `<span class="badge mute" title="Uploaded automatically when a theme needs it">uploaded when needed</span>`
+            }
+            ${l.inUse ? `<span class="badge accent">in use</span>` : ""}
+            <span>${kb(l.bytes)}</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
           ${l.onDoorbell ? "" : `<button class="btn small" data-upload-lib="${esc(l.hash)}" title="Put it on the doorbell now, making room if needed">${icon("upload")}Put on doorbell</button>`}
           <button class="btn small" data-rename-lib="${esc(l.hash)}" data-name="${esc(l.name)}">${icon("edit")}Rename</button>
-          <button class="btn small danger" data-del-lib="${esc(l.hash)}" data-name="${esc(l.name)}" ${l.inUse ? "disabled title='Used by a theme or the default'" : ""}>${icon("trash")}Delete</button>
-        </td>
-      </tr>`,
+          <button class="btn small danger icon" data-del-lib="${esc(l.hash)}" data-name="${esc(l.name)}" aria-label="Delete" ${l.inUse ? "disabled title='Used by a theme or the default'" : "title='Delete'"}>${icon("trash")}</button>
+        </div>
+      </div>`,
     )
     .join("");
+  const slots = sounds.ringtones.length;
   $("#sounds-list").innerHTML = `
     ${
       broken.length === 0
         ? ""
-        : `<div class="notice">
+        : `<div class="notice enter">
              <strong>${broken.length} theme${broken.length === 1 ? "" : "s"} point at a ring sound this console does not have.</strong>
              Ringtone ids are issued per console, so migrating Protect breaks them all at once.
              <ul>${broken
                .map(
                  (b) =>
                    `<li>${esc(b.themeName)} wanted <strong>${esc(b.wants ?? "an unknown sound")}</strong>${
-                     b.canRelinkTo ? ` — <span style="color:var(--ok)">found, ready to re-link</span>` : ""
+                     b.canRelinkTo ? ` — <span class="text-ok">found, ready to re-link</span>` : ""
                    }</li>`,
                )
                .join("")}</ul>
              ${
                repairable > 0
                  ? `<button class="btn primary small" id="relink-sounds">Re-link ${repairable} sound${repairable === 1 ? "" : "s"}</button>`
-                 : `<p class="sub" style="margin:8px 0 0">Upload the audio again under the same name and this becomes a single click.</p>`
+                 : `<p class="sub mt-2">Upload the audio again under the same name and this becomes a single click.</p>`
              }
            </div>`
     }
-    <h3>Library</h3>
-    <p class="sub">
-      Kept by Doorman. A theme can use any of these, however many there are -
-      each is put on the doorbell when a theme needs it.
-    </p>
-    ${
-      libraryRows
-        ? `<table><thead><tr><th>Name</th><th></th><th>Size</th><th></th></tr></thead><tbody>${libraryRows}</tbody></table>`
-        : `<p class="sub"><em>Empty. Use Find a sound or Upload sound to add one.</em></p>`
-    }
+    <div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+      <div class="card flush">
+        <div class="px-5 pb-3 pt-5">
+          <div class="card-title">${icon("sound")}Library <span class="badge mute plain">${(sounds.library ?? []).length}</span></div>
+          <div class="card-sub">Kept by Doorman. A theme can use any of these, however many there are — each goes on the doorbell when a theme needs it.</div>
+        </div>
+        <div class="border-t border-line">${
+          libraryRows || emptyState("The library is empty", "Use Find a sound or Upload sound to add one.", "sound")
+        }</div>
+      </div>
 
-    <h3 style="margin-top:24px">On the doorbell</h3>
-    <p class="sub">
-      ${sounds.ringtones.length} of ${sounds.limit} slots used.
-      ${
-        noCopy.length > 0
-          ? `<br>${noCopy.length} ${noCopy.length === 1 ? "sound has" : "sounds have"} no copy in the library, so Doorman
-             will never remove ${noCopy.length === 1 ? "it" : "them"} to make room. Add the original
-             file${noCopy.length === 1 ? "" : "s"} to the library under the same name and Doorman takes
-             ${noCopy.length === 1 ? "it" : "them"} over.`
-          : ""
-      }
-      ${
-        full
-          ? canMakeRoom
-            ? "Full, but Doorman will remove one of its library sounds to make room when it needs to."
-            : `<strong style="color:var(--bad)">Full, and nothing here is one Doorman can remove and put back.</strong>`
-          : ""
-      }
-    </p>
-    <table>
-      <thead><tr><th>Name</th><th>Id</th><th></th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+      <div class="card flush">
+        <div class="px-5 pb-4 pt-5">
+          <div class="card-title">${icon("bell")}On the doorbell</div>
+          <div class="mt-3 flex items-baseline gap-2"><span class="text-3xl font-bold tabular-nums">${slots}</span><span class="text-sm text-dim">of ${sounds.limit} slots used</span></div>
+          <div class="meter">${Array.from({ length: sounds.limit }, (_, i) => `<i class="${i < slots ? "on" : ""}"></i>`).join("")}</div>
+          <p class="sub mt-3 !text-[13px]">
+            ${
+              noCopy.length > 0
+                ? `${noCopy.length} ${noCopy.length === 1 ? "sound has" : "sounds have"} no copy in the library, so Doorman
+                   will never remove ${noCopy.length === 1 ? "it" : "them"} to make room. Add the original
+                   file${noCopy.length === 1 ? "" : "s"} to the library under the same name and Doorman takes
+                   ${noCopy.length === 1 ? "it" : "them"} over. `
+                : ""
+            }
+            ${
+              full
+                ? canMakeRoom
+                  ? "Full, but Doorman will remove one of its library sounds to make room when it needs to."
+                  : `<strong class="text-bad">Full, and nothing here is one Doorman can remove and put back.</strong>`
+                : ""
+            }
+          </p>
+        </div>
+        <table>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
 
   // One player for the whole tab, shared with the import dialog's.
   $$("[data-listen-lib]").forEach((b) =>
@@ -1240,7 +1824,7 @@ async function renderSounds() {
       listener.src = `/library-sound/${encodeURIComponent(b.dataset.listenLib)}`;
       listener.play().catch((error) => toast(error.message, "bad"));
       listening = b;
-      b.innerHTML = icon("stop");
+      b.innerHTML = EQ;
     }),
   );
 
@@ -1265,7 +1849,7 @@ async function renderSounds() {
   // puts it back.
   $$("[data-rename-lib]").forEach((b) =>
     b.addEventListener("click", () => {
-      const cell = b.closest("tr").querySelector(".lib-name");
+      const cell = b.closest("[data-lib-row]").querySelector(".lib-name");
       cell.innerHTML = `<form class="search-row">
           <input type="text" maxlength="60" value="${esc(b.dataset.name)}" aria-label="New name">
           <button type="submit" class="btn small primary">Save</button>
@@ -1303,7 +1887,14 @@ async function renderSounds() {
 
   $$("[data-del-lib]").forEach((b) =>
     b.addEventListener("click", async () => {
-      if (!confirm(`Delete "${b.dataset.name}" from the library? It is removed from the doorbell too.`)) return;
+      const sure = await ask({
+        title: `Delete ${b.dataset.name}?`,
+        body: "It is removed from the library, and from the doorbell too.",
+        ok: "Delete",
+        danger: true,
+        icon: "trash",
+      });
+      if (!sure) return;
       try {
         const result = await api(`/api/sounds/library?hash=${encodeURIComponent(b.dataset.delLib)}`, {
           method: "DELETE",
@@ -1322,7 +1913,7 @@ async function renderSounds() {
   );
 
   $("#relink-sounds")?.addEventListener("click", (e) =>
-    withBusy(e.target, async () => {
+    withBusy(e.currentTarget, async () => {
       const { relinked } = await api("/api/sounds/relink", { method: "POST" });
       toast(
         relinked.length === 0
@@ -1336,10 +1927,16 @@ async function renderSounds() {
 
   $$("[data-del-sound]").forEach((b) =>
     b.addEventListener("click", async () => {
-      const question = b.dataset.managed
-        ? `Remove "${b.dataset.name}" from the doorbell? It stays in the library and goes back on when a theme needs it.`
-        : `Delete "${b.dataset.name}" from the doorbell? This is the only copy - it cannot be undone.`;
-      if (!confirm(question)) return;
+      const sure = await ask({
+        title: b.dataset.managed ? `Remove ${b.dataset.name} from the doorbell?` : `Delete ${b.dataset.name}?`,
+        body: b.dataset.managed
+          ? "It stays in the library and goes back on when a theme needs it."
+          : "This is the only copy - it cannot be undone.",
+        ok: b.dataset.managed ? "Remove" : "Delete for good",
+        danger: true,
+        icon: "trash",
+      });
+      if (!sure) return;
       try {
         await api(`/api/ringtones?id=${encodeURIComponent(b.dataset.delSound)}`, { method: "DELETE" });
         toast(b.dataset.managed ? "Removed from the doorbell - still in the library." : "Deleted.", "ok");
@@ -1353,9 +1950,7 @@ async function renderSounds() {
 
 // An uploaded file goes through the same trim editor as a found one, and
 // into the library, rather than straight onto the doorbell.
-$("#upload-sound").addEventListener("change", async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
+async function uploadSound(file) {
   sound.replaces = null;
   const form = new FormData();
   form.append("file", file);
@@ -1368,10 +1963,56 @@ $("#upload-sound").addEventListener("change", async (event) => {
     $("#wave-play-sel").focus(); // showModal moves focus itself
   } catch (error) {
     toast(error.message, "bad");
-  } finally {
-    event.target.value = "";
   }
+}
+
+$("#upload-sound").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  await uploadSound(file);
+  event.target.value = "";
 });
+
+/**
+ * Drop a file anywhere on Images or Sounds to upload it - the same as the
+ * Upload button, without the file picker.
+ */
+{
+  const DROPS = {
+    media: { accepts: (f) => f.type === "image/gif", upload: uploadGif, what: "a GIF" },
+    sounds: { accepts: (f) => f.type.startsWith("audio/"), upload: uploadSound, what: "a sound" },
+  };
+  let depth = 0;
+  const target = () => (document.querySelector("dialog[open]") ? null : DROPS[currentTab]);
+  const carriesFiles = (event) => [...(event.dataTransfer?.types ?? [])].includes("Files");
+
+  document.addEventListener("dragenter", (event) => {
+    if (!carriesFiles(event) || !target()) return;
+    depth++;
+    $("#drop-what").textContent = target().what;
+    $("#drop").hidden = false;
+  });
+  document.addEventListener("dragleave", () => {
+    if (depth > 0 && --depth === 0) $("#drop").hidden = true;
+  });
+  document.addEventListener("dragover", (event) => {
+    if (carriesFiles(event) && target()) event.preventDefault();
+  });
+  document.addEventListener("drop", (event) => {
+    depth = 0;
+    $("#drop").hidden = true;
+    const drop = target();
+    if (!drop || !carriesFiles(event)) return;
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    if (!drop.accepts(file)) {
+      toast(`That is not ${drop.what}.`, "bad");
+      return;
+    }
+    drop.upload(file);
+  });
+}
 
 // --------------------------------------------------------------- importing
 //
@@ -1746,7 +2387,7 @@ $("#sound-results").addEventListener("click", (event) => {
     listener.src = listen.dataset.listen;
     listener.play().catch((error) => toast(error.message, "bad"));
     listening = listen;
-    listen.innerHTML = icon("stop");
+    listen.innerHTML = EQ;
     return;
   }
   const use = event.target.closest("[data-use]");
@@ -2363,7 +3004,7 @@ async function renderCalendar() {
 
   const from = $("#cal-from").value;
   const days = $("#cal-days").value;
-  $("#calendar").innerHTML = skeletonDays(Math.min(Number(days), 63));
+  if (!$("#calendar").children.length) $("#calendar").innerHTML = skeletonDays(Math.min(Number(days), 63));
 
   const picked = $("#cal-device").value;
   const response = await load(
@@ -2400,7 +3041,7 @@ async function renderCalendar() {
       .join(" ");
 
     const art = day.filename
-      ? `<img class="chip" loading="lazy" alt="" src="/thumb/${encodeURIComponent(day.filename)}">`
+      ? `<img class="chip-img" loading="lazy" alt="" src="/thumb/${encodeURIComponent(day.filename)}">`
       : "";
 
     return `
@@ -2422,10 +3063,10 @@ async function renderCalendar() {
       const scheduled = daysInMonth.filter((d) => d.priority > 0).length;
 
       return `
-        <section class="month">
+        <section class="month enter">
           <h3 class="month-name">
             ${MONTHS[month - 1]} ${year}
-            ${scheduled > 0 ? `<span class="badge ok">${scheduled} scheduled</span>` : ""}
+            ${scheduled > 0 ? `<span class="badge accent">${scheduled} special day${scheduled === 1 ? "" : "s"}</span>` : ""}
           </h3>
           <div class="cal">
             ${WEEKDAY_HEADS.map((d) => `<div class="wd">${d}</div>`).join("")}
@@ -2443,33 +3084,79 @@ $("#cal-device").addEventListener("change", renderCalendar);
 
 // ----------------------------------------------------------------- history
 
+let historyRows = [];
+let historyFilter = "all";
+let historyName = (id) => id ?? "No theme";
+
 async function renderHistory() {
   const fresh = ticket("history");
-  $("#history").innerHTML = `<tbody>${skeletonRows(5)}</tbody>`;
+  if (!historyRows.length) $("#history").innerHTML = `<div class="grid gap-3">${skeletonRows(5)}</div>`;
 
-  const rows = await load("/api/applies?limit=100", "history");
+  let themeList;
+  [historyRows, themeList] = await Promise.all([load("/api/applies?limit=100", "history"), load("/api/themes", "history")]);
   if (!fresh()) return;
+  historyName = themeNamer(themeList);
+  drawHistory();
+}
+
+/** A timeline, grouped by day, newest first. */
+function drawHistory() {
+  const rows = historyRows.filter((r) =>
+    historyFilter === "all" ? true
+    : historyFilter === "problem" ? r.outcome === "failed" || r.outcome === "no-theme"
+    : r.outcome === historyFilter,
+  );
   if (rows.length === 0) {
-    $("#history").innerHTML = `<tbody><tr><td>${esc("Nothing has run yet.")}</td></tr></tbody>`;
+    $("#history").innerHTML = `<div class="card">${
+      historyRows.length ? emptyState("Nothing here", "No runs match that filter.", "search") : emptyState("Nothing has run yet", "Every apply shows up here, with why.", "clock")
+    }</div>`;
     return;
   }
-  $("#history").innerHTML = `
-    <thead><tr><th>When</th><th>Doorbell</th><th>Outcome</th><th>Theme</th><th>Why</th></tr></thead>
-    <tbody>
-      ${rows
-        .map(
-          (r) => `
-        <tr>
-          <td style="white-space:nowrap">${esc(new Date(r.at).toLocaleString())}</td>
-          <td>${esc(r.deviceName ?? "—")}</td>
-          <td><span class="badge ${r.outcome === "failed" ? "bad" : r.outcome === "no-theme" ? "warn" : r.outcome === "unchanged" ? "mute" : "ok"}">${esc(r.outcome)}</span></td>
-          <td>${esc(r.themeId ?? "—")}</td>
-          <td style="color:var(--text-dim)">${esc(r.reason)}</td>
-        </tr>`,
-        )
-        .join("")}
-    </tbody>`;
+
+  const days = new Map();
+  for (const r of rows) {
+    const key = new Date(r.at).toDateString();
+    if (!days.has(key)) days.set(key, []);
+    days.get(key).push(r);
+  }
+  const today = new Date().toDateString();
+  const yesterday = new Date(Date.now() - 86400000).toDateString();
+
+  $("#history").innerHTML = [...days.entries()]
+    .map(
+      ([key, entries]) => `
+      <section class="enter mb-6">
+        <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-faint">${
+          key === today ? "Today" : key === yesterday ? "Yesterday" : new Date(key).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })
+        }</h3>
+        <ol class="card flush">
+          ${entries
+            .map((r) => {
+              const o = outcomeOf(r.outcome);
+              return `<li class="relative flex gap-4 border-t border-line px-5 py-3.5 first:border-t-0">
+                <span class="mt-1.5 grid size-3 shrink-0 place-items-center rounded-full" style="background:color-mix(in srgb,var(${o.mark}) 25%,transparent)"><span class="size-1.5 rounded-full" style="background:var(${o.mark})"></span></span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-semibold">${esc(historyName(r.themeId))}</span>
+                    <span class="badge ${o.badge}">${esc(o.label)}</span>
+                    ${r.deviceName ? `<span class="chip">${icon("bell")}${esc(r.deviceName)}</span>` : ""}
+                    <span class="ml-auto text-xs tabular-nums text-faint" title="${esc(new Date(r.at).toLocaleString())}">${esc(new Date(r.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }))}</span>
+                  </div>
+                  <div class="mt-1 text-[13px] text-dim [overflow-wrap:anywhere]">${esc(r.reason)}</div>
+                </div>
+              </li>`;
+            })
+            .join("")}
+        </ol>
+      </section>`,
+    )
+    .join("");
 }
+
+segmented("#history-filter", (filter) => {
+  historyFilter = filter;
+  drawHistory();
+});
 
 // -------------------------------------------------------------------- gate
 
@@ -2493,6 +3180,7 @@ function showApp() {
   $("#booting").hidden = true;
   $("#gate").hidden = true;
   $("#app").hidden = false;
+  requestAnimationFrame(placeNavPill);
 }
 
 $("#setup-form").addEventListener("submit", async (event) => {
@@ -2623,7 +3311,8 @@ async function boot() {
     return;
   }
 
-  $("#who").textContent = session.username ?? "";
+  for (const id of ["#who", "#who-side"]) $(id).textContent = session.username ?? "";
+  for (const id of ["#avatar", "#avatar-big"]) $(id).textContent = (session.username ?? "?").slice(0, 1);
   if (session.needsSetup) {
     showGate("setup");
   } else if (!session.authenticated) {

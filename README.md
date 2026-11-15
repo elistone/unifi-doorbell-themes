@@ -411,8 +411,9 @@ it. If something terminates TLS for you, set `DOORMAN_SECURE_COOKIES=true` so
 the session cookie carries `Secure` — the app only ever speaks plain HTTP and
 cannot work that out for itself.
 
-Browse to the service on its port and you get the whole thing: what is on the
-doorbell right now, a theme editor, the image library with a per-file verdict
+Browse to the service on its port and you get the whole thing: a dashboard
+of what is on the doorbell right now, what the scheduler has done over the
+last month and what is coming in the next two weeks, a theme editor, the image library with a per-file verdict
 on whether Protect will accept it, ring sounds, and a **calendar preview** of
 what would show on each of the next N days.
 
@@ -426,14 +427,28 @@ is wrong and nobody can tell which.
 
 ## Development
 
-**Node 23.6 or newer.** There is no build step and no dependencies — Node
-strips the TypeScript itself, and does so without a flag only from 23.6. The
-container ships 24.
+**Node 23.6 or newer.** There is no build step and no runtime dependencies —
+Node strips the TypeScript itself, and does so without a flag only from 23.6.
+The container ships 24.
 
 ```bash
-npm test              # 243 tests
-npm run check         # tests + the import check below
+npm test              # the tests
+npm run check         # tests + the import and stylesheet checks below
 ```
+
+**The UI is styled with Tailwind**, from `src/web/tailwind.css`. Its output,
+`src/web/public/style.css`, is committed, so running Doorman, building the
+image and running the tests still need no install. Only restyling does:
+
+```bash
+npm ci                # Tailwind's CLI, a dev dependency
+npm run css:watch     # rebuild style.css as you edit index.html, app.js or tailwind.css
+npm run css           # one minified build - commit what it writes
+```
+
+`npm run check:css` rebuilds into a temporary file and fails if the committed
+stylesheet differs, so a class added to `app.js` without rebuilding cannot
+ship as nothing.
 
 The scheduling logic is a pure function of configuration and a timestamp,
 with no I/O anywhere near it. That is deliberate: it is where essentially

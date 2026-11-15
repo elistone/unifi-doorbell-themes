@@ -28,6 +28,7 @@ import type { FreesoundSearch, GiphySearch } from "../media/search.ts";
 import { Staging } from "../media/staging.ts";
 import { brokenSounds, isLibraryRef, libraryHash, libraryRef, relinkSounds, soundStatus } from "../sounds.ts";
 import type { SoundLibrary } from "../media/soundlib.ts";
+import { activityByDay, themeShare, windowStart } from "./stats.ts";
 import type { RingtoneCache } from "../ringtones.ts";
 import { sendBytes } from "./range.ts";
 import { MAX_RINGTONES } from "../device/private.ts";
@@ -1027,6 +1028,24 @@ export function createApi(deps: ApiDeps) {
       return store
         .recentApplies(limit, asked ?? undefined)
         .map((row) => ({ ...row, deviceName: row.deviceId ? names.get(row.deviceId) ?? null : null }));
+    },
+
+    /**
+     * The dashboard: what the scheduler did each day over the last N, and
+     * which themes were on the doorbells. Across every doorbell, or one.
+     */
+    "GET /api/stats": async (_req, url) => {
+      const days = Math.min(Math.max(Number(url.searchParams.get("days") ?? 30) || 30, 1), 366);
+      const asked = url.searchParams.get("device");
+      const now = new Date();
+      const rows = store
+        .appliesSince(windowStart(days, now).toISOString())
+        .filter((row) => !asked || row.deviceId === asked);
+      const names = new Map(store.themes().map((t) => [t.id, t.name]));
+      return {
+        days: activityByDay(rows, days, now),
+        themes: themeShare(rows).map((t) => ({ ...t, name: names.get(t.themeId) ?? t.themeId })),
+      };
     },
 
     /**

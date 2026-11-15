@@ -4,8 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Doorman</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔔</text></svg>">
+<link rel="icon" href="/logo.svg" type="image/svg+xml">
+<!-- Built from ../tailwind.css by `npm run css`; see the note there. -->
 <link rel="stylesheet" href="/style.css">
+<script>
+  // Before first paint, so a saved light/dark choice does not flash the
+  // other, and a collapsed sidebar does not open and then shut.
+  try {
+    const t = localStorage.getItem("doorman-theme");
+    if (t) document.documentElement.dataset.theme = t;
+    if (localStorage.getItem("doorman-sidebar") === "collapsed") document.documentElement.dataset.sidebar = "collapsed";
+  } catch {}
+</script>
 </head>
 <body>
 
@@ -15,20 +25,32 @@
 
 <!-- The page is blank until /api/session answers, and on a cold container
      that is long enough to look broken. -->
-<div id="booting">
-  <div class="spin big"></div>
+<div id="booting" class="fixed inset-0 grid place-items-center">
+  <div class="flex flex-col items-center gap-4">
+    <img src="/logo.svg" alt="" class="size-14 rounded-2xl shadow-lift animate-pulse">
+    <div class="spin big"></div>
+  </div>
 </div>
 
 <!-- Shown until there is a session. The app markup below stays hidden
      rather than being rendered on demand, so there is one place the page
-     structure lives and no duplicate login-only stylesheet. -->
-<div id="gate" hidden>
-  <div class="gate-card">
-    <div class="gate-brand"><span class="dot">🔔</span> Doorman</div>
+     structure lives. -->
+<div id="gate" class="relative grid min-h-screen place-items-center overflow-hidden px-4 py-10" hidden>
+  <div class="blob bg-brand pointer-events-none absolute -left-24 -top-24 size-96 rounded-full opacity-25 blur-3xl"></div>
+  <div class="blob bg-brand pointer-events-none absolute -bottom-32 -right-24 size-[28rem] rounded-full opacity-20 blur-3xl"></div>
+
+  <div class="enter relative w-full max-w-[400px] rounded-3xl border border-line bg-surface/85 p-8 shadow-lift backdrop-blur-xl">
+    <div class="mb-7 flex items-center gap-3">
+      <img src="/logo.svg" alt="" class="size-11 rounded-2xl shadow-lift">
+      <div>
+        <div class="text-lg font-bold tracking-tight">Doorman</div>
+        <div class="text-xs text-faint">Welcome images &amp; ring sounds for your doorbell</div>
+      </div>
+    </div>
 
     <form id="setup-form" hidden>
-      <h2>Create your account</h2>
-      <p class="sub">
+      <h2 class="text-xl font-bold tracking-tight">Create your account</h2>
+      <p class="sub mb-6 mt-1">
         First run. This account is the only way in, so nothing is set up for
         you — there is no default password to forget to change.
       </p>
@@ -45,12 +67,12 @@
         <span>Confirm password</span>
         <input type="password" id="s-pass2" autocomplete="new-password" required minlength="10">
       </label>
-      <button type="submit" class="btn primary wide">Create account</button>
+      <button type="submit" class="btn primary wide mt-2">Create account</button>
     </form>
 
     <form id="login-form" hidden>
-      <h2>Sign in</h2>
-      <p class="sub">Doorman is locked.</p>
+      <h2 class="text-xl font-bold tracking-tight">Welcome back</h2>
+      <p class="sub mb-6 mt-1">Sign in to manage your doorbell.</p>
       <label class="field">
         <span>Username</span>
         <input type="text" id="l-user" autocomplete="username" required>
@@ -59,59 +81,128 @@
         <span>Password</span>
         <input type="password" id="l-pass" autocomplete="current-password" required>
       </label>
-      <button type="submit" class="btn primary wide">Sign in</button>
+      <button type="submit" class="btn primary wide mt-2">Sign in</button>
     </form>
 
-    <p class="gate-error" id="gate-error" hidden></p>
+    <p class="mt-4 rounded-xl bg-bad-bg px-3 py-2.5 text-[13.5px] font-medium text-bad" id="gate-error" hidden></p>
   </div>
 </div>
 
-<div id="app" hidden>
-<header>
-  <div class="brand">
-    <span class="dot">🔔</span>
-    <span>Doorman</span>
-    <span class="version" id="version">—</span>
-  </div>
-  <nav>
-    <a href="/" data-tab="now" aria-current="page"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a4.5 4.5 0 0 0-4.5 4.5c0 2.6-.6 4.1-1.1 4.9a.6.6 0 0 0 .5.9h10.2a.6.6 0 0 0 .5-.9c-.5-.8-1.1-2.3-1.1-4.9A4.5 4.5 0 0 0 8 1.5Z"/><path d="M6.3 13.6a1.8 1.8 0 0 0 3.4 0"/></svg><span>Now</span></a>
-    <a href="/themes" data-tab="themes"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="2.8" width="8" height="8" rx="1.4"/><path d="M12.2 5.2h1.4a.6.6 0 0 1 .6.6v7a.6.6 0 0 1-.6.6h-7a.6.6 0 0 1-.6-.6v-1.4"/></svg><span>Themes</span></a>
-    <a href="/images" data-tab="media"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.6"/><circle cx="5.6" cy="6.4" r="1.1"/><path d="m2.4 11.4 3.1-2.8 2.6 2.3 2.4-2 3.1 2.7"/></svg><span>Images</span></a>
-    <a href="/sounds" data-tab="sounds"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8.6 2.6 5 5.6H2.6v4.8H5l3.6 3V2.6Z"/><path d="M11.4 5.9a3.4 3.4 0 0 1 0 4.2M13.3 4a6 6 0 0 1 0 8"/></svg><span>Sounds</span></a>
-    <a href="/calendar" data-tab="calendar"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3.2" width="12" height="10.8" rx="1.4"/><path d="M2 6.6h12M5.4 1.8v2.4M10.6 1.8v2.4"/></svg><span>Calendar</span></a>
-    <a href="/history" data-tab="history"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 8a5.4 5.4 0 1 0 1.7-3.9"/><path d="M2.3 2.6v2.9h2.9"/><path d="M8 5.1V8l2 1.3"/></svg><span>History</span></a>
-    <a href="/settings" data-tab="settings"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M12.9 9.8a1.1 1.1 0 0 0 .2 1.2l.1.1a1.3 1.3 0 1 1-1.9 1.9l-.1-.1a1.1 1.1 0 0 0-1.2-.2 1.1 1.1 0 0 0-.7 1v.2a1.3 1.3 0 1 1-2.6 0v-.1a1.1 1.1 0 0 0-.8-1 1.1 1.1 0 0 0-1.2.2l-.1.1a1.3 1.3 0 1 1-1.9-1.9l.1-.1a1.1 1.1 0 0 0 .2-1.2 1.1 1.1 0 0 0-1-.7h-.2a1.3 1.3 0 1 1 0-2.6h.1a1.1 1.1 0 0 0 1-.8 1.1 1.1 0 0 0-.2-1.2l-.1-.1a1.3 1.3 0 1 1 1.9-1.9l.1.1a1.1 1.1 0 0 0 1.2.2h.1a1.1 1.1 0 0 0 .7-1v-.2a1.3 1.3 0 1 1 2.6 0v.1a1.1 1.1 0 0 0 .7 1 1.1 1.1 0 0 0 1.2-.2l.1-.1a1.3 1.3 0 1 1 1.9 1.9l-.1.1a1.1 1.1 0 0 0-.2 1.2v.1a1.1 1.1 0 0 0 1 .7h.2a1.3 1.3 0 1 1 0 2.6h-.1a1.1 1.1 0 0 0-1 .7Z"/></svg><span>Settings</span></a>
-    <button id="account" title="Account" aria-label="Account"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.3" r="2.6"/><path d="M2.9 13.6a5.1 5.1 0 0 1 10.2 0"/></svg></button>
-  </nav>
-</header>
+<div id="app" class="min-h-screen lg:grid" hidden>
 
-<main>
+<!-- One sidebar at every width: a column down the left on a wide screen,
+     a bar across the top with a scrolling row of tabs on a narrow one. -->
+<aside class="sticky top-0 z-30 grid grid-cols-[1fr_auto] items-center border-b border-line bg-surface/75 backdrop-blur-xl
+              lg:flex lg:h-screen lg:flex-col lg:items-stretch lg:border-b-0 lg:border-r lg:p-4">
+  <!-- Wide screens only: shrink the sidebar to its icons, and back. -->
+  <button id="collapse-side" class="absolute -right-3 top-9 z-40 hidden size-6 cursor-pointer place-items-center rounded-full border border-line bg-surface text-dim shadow-soft transition-colors hover:text-ink lg:grid"
+          aria-label="Collapse the sidebar" aria-expanded="true" title="Collapse the sidebar ( [ )">
+    <svg class="ico size-3.5 transition-transform duration-300" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
+  </button>
+
+  <a href="/" data-tab="now" class="brand flex items-center gap-3 px-4 py-3 text-ink no-underline lg:px-2 lg:pb-6 lg:pt-2" title="Doorman">
+    <img src="/logo.svg" alt="" class="size-9 shrink-0 rounded-xl shadow-lift">
+    <span class="side-text leading-tight">
+      <span class="block font-bold tracking-tight">Doorman</span>
+      <span class="block font-mono text-[11px] text-faint" id="version">—</span>
+    </span>
+  </a>
+
+  <div class="flex items-center gap-1 pr-3 lg:order-last lg:mt-auto lg:flex-col lg:items-stretch lg:gap-3 lg:pr-0">
+    <!-- What Doorman is connected to; filled in from /api/state. -->
+    <div class="side-text hidden rounded-2xl border border-line bg-surface p-3 text-xs lg:block" id="status-card">
+      <div class="mb-2 flex items-center gap-2 font-semibold text-ink"><span class="live" id="status-live"></span><span id="status-title">Connecting…</span></div>
+      <div class="space-y-1 text-dim" id="status-lines"></div>
+    </div>
+    <div class="side-tools flex items-center gap-1 lg:justify-between">
+      <button class="btn ghost icon" id="toggle-theme" title="Switch light or dark" aria-label="Switch light or dark"><svg class="ico size-[18px]" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.3"/><path d="M8 2.7v10.6a5.3 5.3 0 0 0 0-10.6Z" fill="currentColor" stroke="none"/></svg></button>
+      <button class="btn ghost gap-2.5 lg:flex-1 lg:justify-start" id="account" title="Account" aria-label="Account">
+        <span class="bg-brand grid size-7 place-items-center rounded-full text-xs font-bold uppercase text-white" id="avatar">?</span>
+        <span class="side-text hidden truncate text-sm lg:inline" id="who-side"></span>
+      </button>
+    </div>
+  </div>
+
+  <nav id="nav" class="scrollbar-none relative col-span-2 flex gap-1 overflow-x-auto px-3 pb-2.5 lg:flex-col lg:overflow-visible lg:p-0" aria-label="Pages">
+    <span id="nav-pill" aria-hidden="true"></span>
+    <a class="nav-link" href="/" data-tab="now" aria-current="page"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="6" rx="1.2"/><rect x="9" y="2" width="5" height="3.5" rx="1.2"/><rect x="9" y="7.5" width="5" height="6.5" rx="1.2"/><rect x="2" y="10" width="5" height="4" rx="1.2"/></svg><span>Dashboard</span><kbd class="key">1</kbd></a>
+    <a class="nav-link" href="/themes" data-tab="themes"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="2.8" width="8" height="8" rx="1.4"/><path d="M12.2 5.2h1.4a.6.6 0 0 1 .6.6v7a.6.6 0 0 1-.6.6h-7a.6.6 0 0 1-.6-.6v-1.4"/></svg><span>Themes</span><kbd class="key">2</kbd></a>
+    <a class="nav-link" href="/images" data-tab="media"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.6"/><circle cx="5.6" cy="6.4" r="1.1"/><path d="m2.4 11.4 3.1-2.8 2.6 2.3 2.4-2 3.1 2.7"/></svg><span>Images</span><kbd class="key">3</kbd></a>
+    <a class="nav-link" href="/sounds" data-tab="sounds"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8.6 2.6 5 5.6H2.6v4.8H5l3.6 3V2.6Z"/><path d="M11.4 5.9a3.4 3.4 0 0 1 0 4.2M13.3 4a6 6 0 0 1 0 8"/></svg><span>Sounds</span><kbd class="key">4</kbd></a>
+    <a class="nav-link" href="/calendar" data-tab="calendar"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3.2" width="12" height="10.8" rx="1.4"/><path d="M2 6.6h12M5.4 1.8v2.4M10.6 1.8v2.4"/></svg><span>Calendar</span><kbd class="key">5</kbd></a>
+    <a class="nav-link" href="/history" data-tab="history"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 8a5.4 5.4 0 1 0 1.7-3.9"/><path d="M2.3 2.6v2.9h2.9"/><path d="M8 5.1V8l2 1.3"/></svg><span>History</span><kbd class="key">6</kbd></a>
+    <a class="nav-link" href="/settings" data-tab="settings"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M12.9 9.8a1.1 1.1 0 0 0 .2 1.2l.1.1a1.3 1.3 0 1 1-1.9 1.9l-.1-.1a1.1 1.1 0 0 0-1.2-.2 1.1 1.1 0 0 0-.7 1v.2a1.3 1.3 0 1 1-2.6 0v-.1a1.1 1.1 0 0 0-.8-1 1.1 1.1 0 0 0-1.2.2l-.1.1a1.3 1.3 0 1 1-1.9-1.9l.1-.1a1.1 1.1 0 0 0 .2-1.2 1.1 1.1 0 0 0-1-.7h-.2a1.3 1.3 0 1 1 0-2.6h.1a1.1 1.1 0 0 0 1-.8 1.1 1.1 0 0 0-.2-1.2l-.1-.1a1.3 1.3 0 1 1 1.9-1.9l.1.1a1.1 1.1 0 0 0 1.2.2h.1a1.1 1.1 0 0 0 .7-1v-.2a1.3 1.3 0 1 1 2.6 0v.1a1.1 1.1 0 0 0 .7 1 1.1 1.1 0 0 0 1.2-.2l.1-.1a1.3 1.3 0 1 1 1.9 1.9l-.1.1a1.1 1.1 0 0 0-.2 1.2v.1a1.1 1.1 0 0 0 1 .7h.2a1.3 1.3 0 1 1 0 2.6h-.1a1.1 1.1 0 0 0-1 .7Z"/></svg><span>Settings</span><kbd class="key">7</kbd></a>
+  </nav>
+</aside>
+
+<main class="mx-auto w-full max-w-[1240px] px-4 pb-24 pt-6 sm:px-8 lg:pt-10">
   <!-- ------------------------------------------------------------- Now -->
   <section id="tab-now">
-    <h2>On the doorbell now</h2>
-    <p class="sub">What a visitor sees and hears when they press the button.</p>
-
-    <div id="now-panel"></div>
-
-    <div class="row" style="margin-top:16px">
-      <button class="btn primary" id="apply-now"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.4 2.8 12.6 8l-8.2 5.2V2.8Z"/></svg>Apply now</button>
-      <button class="btn" id="dry-run"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.3 8S3.9 3.4 8 3.4 14.7 8 14.7 8 12.1 12.6 8 12.6 1.3 8 1.3 8Z"/><circle cx="8" cy="8" r="1.9"/></svg>Preview without changing</button>
+    <div class="page-head">
+      <div>
+        <p class="text-[13px] font-semibold text-accent" id="now-date"></p>
+        <h2 id="now-greeting">Hello</h2>
+        <p class="sub">What a visitor sees and hears when they press the button, and how the schedule has been doing.</p>
+      </div>
       <div class="spacer"></div>
-      <button class="btn small" id="toggle-theme" title="Switch light/dark" aria-label="Switch light or dark"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.3"/><path d="M8 2.7v10.6a5.3 5.3 0 0 0 0-10.6Z" fill="currentColor" stroke="none"/></svg></button>
+      <div class="row">
+        <button class="btn" id="dry-run"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.3 8S3.9 3.4 8 3.4 14.7 8 14.7 8 12.1 12.6 8 12.6 1.3 8 1.3 8Z"/><circle cx="8" cy="8" r="1.9"/></svg>Preview</button>
+        <button class="btn primary" id="apply-now"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.4 2.8 12.6 8l-8.2 5.2V2.8Z"/></svg>Apply now</button>
+      </div>
     </div>
 
-    <div class="card" style="margin-top:22px">
-      <h3>Library</h3>
-      <dl class="kv" id="counts"></dl>
+    <div id="now-panel" class="grid gap-5"></div>
+
+    <div id="now-stats" class="stagger mt-5 grid grid-cols-2 gap-4 xl:grid-cols-4"></div>
+
+    <div class="mt-5 grid gap-5 xl:grid-cols-3 [&>*]:min-w-0">
+      <div class="card xl:col-span-2">
+        <div class="row mb-4">
+          <div>
+            <div class="card-title">Scheduler activity</div>
+            <div class="card-sub">What each daily run did, over the last 30 days</div>
+          </div>
+          <div class="spacer"></div>
+          <div class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-dim" id="now-legend"></div>
+        </div>
+        <div id="now-activity"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Most shown</div>
+        <div class="card-sub mb-4">Themes on the doorbell, last 30 days</div>
+        <div id="now-top"></div>
+      </div>
+    </div>
+
+    <div class="mt-5 grid gap-5 xl:grid-cols-3 [&>*]:min-w-0">
+      <div class="card xl:col-span-2">
+        <div class="row mb-4">
+          <div>
+            <div class="card-title">Up next</div>
+            <div class="card-sub">The next two weeks, worked out by the same rules the scheduler uses</div>
+          </div>
+          <div class="spacer"></div>
+          <a href="/calendar" data-tab="calendar" class="btn small ghost">Full calendar →</a>
+        </div>
+        <div id="now-upcoming" class="scrollbar-none -mx-1 flex gap-2.5 overflow-x-auto px-1 pb-1"></div>
+      </div>
+      <div class="card">
+        <div class="row mb-3">
+          <div class="card-title">Recent runs</div>
+          <div class="spacer"></div>
+          <a href="/history" data-tab="history" class="btn small ghost">All →</a>
+        </div>
+        <div id="now-recent"></div>
+      </div>
     </div>
   </section>
 
   <!-- ---------------------------------------------------------- Themes -->
   <section id="tab-themes" hidden>
-    <div class="row">
+    <div class="page-head">
       <div>
         <h2>Themes</h2>
-        <p class="sub" style="margin:0">
+        <p class="sub">
           A theme pairs an image with a sound and says when it applies.
           Higher priority wins outright — it excludes everything below it.
         </p>
@@ -119,174 +210,247 @@
       <div class="spacer"></div>
       <button class="btn primary" id="new-theme"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>New theme</button>
     </div>
-    <div class="card" style="margin-top:18px" id="themes-list"></div>
+    <div class="row mb-5">
+      <div class="relative w-full max-w-xs">
+        <svg class="ico pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>
+        <input type="search" id="themes-search" placeholder="Search themes" class="!pl-9" autocomplete="off">
+      </div>
+      <div class="segmented" role="group" aria-label="Show" id="themes-filter">
+        <button type="button" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" data-filter="on" aria-pressed="false">Enabled</button>
+        <button type="button" data-filter="off" aria-pressed="false">Disabled</button>
+      </div>
+    </div>
+    <div id="themes-list" class="grid gap-4 md:grid-cols-2 2xl:grid-cols-3"></div>
   </section>
 
   <!-- ----------------------------------------------------------- Media -->
   <section id="tab-media" hidden>
-    <div class="row">
+    <div class="page-head">
       <div>
         <h2>Welcome images</h2>
-        <p class="sub" style="margin:0">
+        <p class="sub">
           The doorbell rebuilds every GIF into a 240×240 sprite and rejects it
           if that comes out over 1&nbsp;MB. Frame count is what decides.
         </p>
       </div>
       <div class="spacer"></div>
-      <button class="btn" id="find-gif"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>Find a GIF</button>
-      <label class="btn primary" for="upload-gif"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10.8V2.4M4.6 5.8 8 2.4l3.4 3.4"/><path d="M2.6 10.6v2a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-2"/></svg>Upload GIF</label>
-      <input type="file" id="upload-gif" accept="image/gif" hidden>
+      <div class="row">
+        <button class="btn" id="find-gif"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>Find a GIF</button>
+        <label class="btn primary" for="upload-gif"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10.8V2.4M4.6 5.8 8 2.4l3.4 3.4"/><path d="M2.6 10.6v2a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-2"/></svg>Upload GIF</label>
+        <input type="file" id="upload-gif" accept="image/gif" hidden>
+        <span class="hidden text-xs text-faint xl:inline">or drop a GIF anywhere</span>
+      </div>
     </div>
-    <div class="grid media" style="margin-top:18px" id="media-grid"></div>
+    <div class="row mb-5">
+      <div class="relative w-full max-w-xs">
+        <svg class="ico pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>
+        <input type="search" id="media-search" placeholder="Search images" class="!pl-9" autocomplete="off">
+      </div>
+      <div class="segmented" role="group" aria-label="Show" id="media-filter">
+        <button type="button" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" data-filter="used" aria-pressed="false">In use</button>
+        <button type="button" data-filter="unused" aria-pressed="false">Unused</button>
+        <button type="button" data-filter="problem" aria-pressed="false">Too big</button>
+      </div>
+      <div class="spacer"></div>
+      <span class="text-xs text-faint" id="media-count"></span>
+    </div>
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-4" id="media-grid"></div>
   </section>
 
   <!-- ---------------------------------------------------------- Sounds -->
   <section id="tab-sounds" hidden>
-    <div class="row">
+    <div class="page-head">
       <div>
         <h2>Ring sounds</h2>
-        <p class="sub" style="margin:0">
+        <p class="sub">
           What the doorbell's own speaker plays to the visitor. Doorman keeps
           its own library, and puts each sound on the doorbell when a theme
-          needs it - the doorbell itself only has room for a dozen.
+          needs it — the doorbell itself only has room for a dozen.
         </p>
       </div>
       <div class="spacer"></div>
-      <button class="btn" id="find-sound"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>Find a sound</button>
-      <label class="btn primary" for="upload-sound"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10.8V2.4M4.6 5.8 8 2.4l3.4 3.4"/><path d="M2.6 10.6v2a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-2"/></svg>Upload sound</label>
-      <input type="file" id="upload-sound" accept="audio/*" hidden>
+      <div class="row">
+        <button class="btn" id="find-sound"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>Find a sound</button>
+        <label class="btn primary" for="upload-sound"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10.8V2.4M4.6 5.8 8 2.4l3.4 3.4"/><path d="M2.6 10.6v2a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-2"/></svg>Upload sound</label>
+        <input type="file" id="upload-sound" accept="audio/*" hidden>
+      </div>
     </div>
-    <div class="card" style="margin-top:18px" id="sounds-list"></div>
+    <div id="sounds-list"></div>
   </section>
 
   <!-- -------------------------------------------------------- Calendar -->
   <section id="tab-calendar" hidden>
-    <h2>What's coming</h2>
-    <p class="sub">
-      Computed with the same rules the scheduler uses, so this is a real
-      answer to "will Christmas actually win?" rather than a guess.
-    </p>
-    <div class="row" style="margin-bottom:16px">
-      <label class="field" style="margin:0">
+    <div class="page-head">
+      <div>
+        <h2>What's coming</h2>
+        <p class="sub">
+          Computed with the same rules the scheduler uses, so this is a real
+          answer to "will Christmas actually win?" rather than a guess.
+        </p>
+      </div>
+    </div>
+    <div class="card mb-6 flex flex-wrap items-end gap-4 !py-4">
+      <label class="field !mb-0 w-44">
         <span>From</span>
         <input type="date" id="cal-from">
       </label>
-      <label class="field" style="margin:0" id="cal-device-field" hidden>
+      <label class="field !mb-0 w-52" id="cal-device-field" hidden>
         <span>Doorbell</span>
         <select id="cal-device"></select>
       </label>
-      <label class="field" style="margin:0">
-        <span>Days</span>
+      <label class="field !mb-0 w-36">
+        <span>Show</span>
         <select id="cal-days">
-          <option value="28">28</option>
-          <option value="63" selected>63</option>
-          <option value="182">182</option>
+          <option value="28">4 weeks</option>
+          <option value="63" selected>9 weeks</option>
+          <option value="182">6 months</option>
           <option value="364">a year</option>
         </select>
       </label>
+      <div class="spacer"></div>
+      <div class="flex flex-wrap items-center gap-4 text-xs text-dim">
+        <span class="flex items-center gap-1.5"><i class="legend-key border border-accent" style="background:color-mix(in srgb,var(--accent) 12%,var(--surface))"></i>Beats the everyday rotation</span>
+        <span class="flex items-center gap-1.5"><i class="legend-key outline-2 outline-accent" style="outline-style:solid;outline-offset:1px"></i>Today</span>
+      </div>
     </div>
     <div id="calendar"></div>
   </section>
 
   <!-- -------------------------------------------------------- Settings -->
   <section id="tab-settings" hidden>
-    <h2>Settings</h2>
-    <p class="sub">Doorbells, and how themes are chosen for them.</p>
+    <div class="page-head">
+      <div>
+        <h2>Settings</h2>
+        <p class="sub">Doorbells, and how themes are chosen for them.</p>
+      </div>
+    </div>
 
     <div class="card">
       <div class="row">
         <div>
-          <h3 style="margin:0">Doorbells</h3>
-          <p class="sub" style="margin:4px 0 0">
+          <div class="card-title">Doorbells</div>
+          <div class="card-sub">
             Each one rotates independently. A theme with no doorbells ticked
             applies to all of them.
-          </p>
+          </div>
         </div>
         <div class="spacer"></div>
         <button class="btn primary" id="add-doorbell"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>Add doorbell</button>
       </div>
-      <div id="devices-list" style="margin-top:14px"></div>
+      <div id="devices-list" class="mt-4 grid gap-3"></div>
     </div>
 
-    <div class="grid cols-2" style="margin-top:16px">
+    <div class="mt-5 grid gap-5 lg:grid-cols-2">
       <div class="card">
-        <h3>Selection</h3>
-        <p class="sub" style="margin-bottom:12px">
-          How a day is picked when several themes tie on priority.
-        </p>
-        <select id="selection">
-          <option value="random">Random — a different one each day, stable within the day</option>
-          <option value="sequential">Sequential — straight through the list in order</option>
-        </select>
+        <div class="card-title">Selection</div>
+        <div class="card-sub mb-4">How a day is picked when several themes tie on priority.</div>
+        <div class="grid gap-2.5" id="selection">
+          <label class="choice">
+            <input type="radio" name="selection" value="random">
+            <span><span class="block text-sm font-semibold">Random</span><span class="block text-[13px] text-dim">A different one each day, stable within the day</span></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="selection" value="sequential">
+            <span><span class="block text-sm font-semibold">Sequential</span><span class="block text-[13px] text-dim">Straight through the list in order</span></span>
+          </label>
+        </div>
       </div>
 
       <div class="card">
-        <h3>Daily change</h3>
+        <div class="card-title">Daily change</div>
+        <div class="card-sub mb-4">When the doorbell moves on, and what it plays by default.</div>
         <label class="field">
           <span>Hour to change theme <span class="hint">— local time</span></span>
           <select id="roll-hour"></select>
         </label>
-        <label class="field" style="margin-bottom:0">
+        <label class="field !mb-0">
           <span>Default ring sound <span class="hint">— used when a theme names none</span></span>
           <select id="default-ringtone"></select>
         </label>
-        <p class="sub" style="margin:12px 0 0" id="settings-source"></p>
+        <p class="sub mt-3 !text-[13px]" id="settings-source"></p>
       </div>
     </div>
   </section>
 
   <!-- --------------------------------------------------------- History -->
   <section id="tab-history" hidden>
-    <h2>History</h2>
-    <p class="sub">Every apply, and why. The answer to "why is it showing that".</p>
-    <div class="card"><table id="history"></table></div>
+    <div class="page-head">
+      <div>
+        <h2>History</h2>
+        <p class="sub">Every apply, and why. The answer to "why is it showing that".</p>
+      </div>
+    </div>
+    <div class="row mb-5">
+      <div class="segmented" role="group" aria-label="Show" id="history-filter">
+        <button type="button" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" data-filter="applied" aria-pressed="false">Changed</button>
+        <button type="button" data-filter="unchanged" aria-pressed="false">Unchanged</button>
+        <button type="button" data-filter="problem" aria-pressed="false">Problems</button>
+      </div>
+    </div>
+    <div id="history"></div>
   </section>
 </main>
 
 </div><!-- /#app -->
 
 <!-- ------------------------------------------------------ theme editor -->
-<dialog id="theme-dialog">
+<dialog id="theme-dialog" class="wide">
   <form method="dialog" id="theme-form">
-    <div class="head" id="theme-dialog-title">New theme</div>
+    <div class="head"><span class="bg-brand grid size-8 place-items-center rounded-xl text-white"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="2.8" width="8" height="8" rx="1.4"/><path d="M12.2 5.2h1.4a.6.6 0 0 1 .6.6v7a.6.6 0 0 1-.6.6h-7a.6.6 0 0 1-.6-.6v-1.4"/></svg></span><span id="theme-dialog-title">New theme</span></div>
     <div class="content">
-      <label class="field">
-        <span>Name</span>
-        <input type="text" id="f-name" required placeholder="Christmas">
-      </label>
-      <label class="field">
-        <span>Id <span class="hint">— permanent, used in logs</span></span>
-        <input type="text" id="f-id" required pattern="[A-Za-z0-9_.\-]+" placeholder="christmas">
-      </label>
-      <label class="field">
-        <span>Image</span>
-        <select id="f-image" required></select>
-      </label>
-      <label class="field">
-        <span>Sound <span class="hint">— falls back to the default when unset</span></span>
-        <select id="f-sound"></select>
-      </label>
-      <label class="field" id="f-devices-field">
-        <span>Applies to <span class="hint">— none ticked means every doorbell</span></span>
-        <div class="weekdays" id="f-devices"></div>
-      </label>
-      <label class="field">
-        <span>Priority <span class="hint">— higher excludes lower entirely</span></span>
-        <input type="number" id="f-priority" value="0" min="0" max="1000">
-      </label>
-      <label class="field">
-        <span><input type="checkbox" id="f-enabled" checked> Enabled</span>
-      </label>
+      <div class="grid gap-6 md:grid-cols-[180px_minmax(0,1fr)]">
+        <div>
+          <div class="screen" id="f-image-preview"></div>
+          <label class="mt-4 flex items-center justify-between gap-3 text-sm font-semibold">
+            Enabled
+            <span class="switch"><input type="checkbox" id="f-enabled" checked></span>
+          </label>
+        </div>
+        <div>
+          <div class="grid gap-x-4 sm:grid-cols-2">
+            <label class="field">
+              <span>Name</span>
+              <input type="text" id="f-name" required placeholder="Christmas">
+            </label>
+            <label class="field">
+              <span>Id <span class="hint">— permanent, used in logs</span></span>
+              <input type="text" id="f-id" required pattern="[A-Za-z0-9_.\-]+" placeholder="christmas">
+            </label>
+            <label class="field">
+              <span>Image</span>
+              <select id="f-image" required></select>
+            </label>
+            <label class="field">
+              <span>Sound <span class="hint">— default when unset</span></span>
+              <select id="f-sound"></select>
+            </label>
+          </div>
+          <label class="field" id="f-devices-field">
+            <span>Applies to <span class="hint">— none ticked means every doorbell</span></span>
+            <div class="weekdays" id="f-devices"></div>
+          </label>
+          <label class="field">
+            <span>Priority <span class="hint">— higher excludes lower entirely</span></span>
+            <input type="number" id="f-priority" value="0" min="0" max="1000" class="!w-32">
+          </label>
+        </div>
+      </div>
 
-      <h3 style="margin-top:20px">When does it apply?</h3>
+      <div class="mb-3 mt-2 flex items-center gap-3">
+        <h3>When does it apply?</h3>
+        <span class="text-xs text-faint">Any one window matching is enough</span>
+      </div>
       <div id="f-rules"></div>
-      <button type="button" class="btn small" id="add-rule">Add another window</button>
+      <button type="button" class="btn small" id="add-rule"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>Add another window</button>
     </div>
     <div class="foot">
       <button type="button" class="btn danger" id="delete-theme" hidden>Delete</button>
       <div class="spacer"></div>
       <button type="button" class="btn" id="cancel-theme">Cancel</button>
-      <button type="submit" class="btn primary">Save</button>
+      <button type="submit" class="btn primary">Save theme</button>
     </div>
   </form>
 </dialog>
@@ -295,7 +459,7 @@
 <!-- Two views in one dialog: find something, then crop and trim it. One
      dialog rather than two so Back keeps the search results. -->
 <dialog id="gif-dialog" class="wide">
-  <div class="head" id="gif-dialog-title">Find a GIF</div>
+  <div class="head"><span class="bg-brand grid size-8 place-items-center rounded-xl text-white"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.6"/><circle cx="5.6" cy="6.4" r="1.1"/><path d="m2.4 11.4 3.1-2.8 2.6 2.3 2.4-2 3.1 2.7"/></svg></span><span id="gif-dialog-title">Find a GIF</span></div>
   <div class="content">
     <div id="gif-find">
       <form class="search-row" id="gif-search-form">
@@ -306,9 +470,9 @@
         Searching needs a free Giphy key in <code>GIPHY_API_KEY</code>.
         Pasting a link below works without one.
       </p>
-      <div class="results" id="gif-results"></div>
+      <div class="results stagger" id="gif-results"></div>
       <button type="button" class="btn small" id="gif-more" hidden>More results</button>
-      <form class="search-row" id="gif-link-form" style="margin-top:16px">
+      <form class="search-row mt-4" id="gif-link-form">
         <input type="text" id="gif-link" placeholder="…or paste a link to a GIF, or a Giphy page" autocomplete="off">
         <button type="submit" class="btn">Import</button>
       </form>
@@ -321,7 +485,7 @@
             <img id="crop-img" alt="" draggable="false">
             <div class="crop-box" id="crop-box"><span class="crop-handle" id="crop-handle"></span></div>
           </div>
-          <p class="sub" style="margin:8px 0 0">Drag the square to choose what shows. Drag its corner to zoom.</p>
+          <p class="sub mt-2 !text-[13px]">Drag the square to choose what shows. Drag its corner to zoom.</p>
         </div>
         <div>
           <label class="field">
@@ -332,13 +496,13 @@
             <span>End <span class="hint" id="gif-end-label"></span></span>
             <input type="range" id="gif-end" min="0" step="0.05">
           </label>
-          <p class="sub" id="gif-estimate"></p>
-          <button type="button" class="btn" id="gif-preview">Preview</button>
-          <div class="result" id="gif-result" hidden>
+          <p class="sub mb-3 !text-[13px]" id="gif-estimate"></p>
+          <button type="button" class="btn" id="gif-preview"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.3 8S3.9 3.4 8 3.4 14.7 8 14.7 8 12.1 12.6 8 12.6 1.3 8 1.3 8Z"/><circle cx="8" cy="8" r="1.9"/></svg>Preview</button>
+          <div class="result enter" id="gif-result" hidden>
             <img id="gif-result-img" alt="Preview of the result">
             <div class="facts" id="gif-result-facts"></div>
           </div>
-          <label class="field" style="margin-top:14px">
+          <label class="field mt-4">
             <span>Save as</span>
             <input type="text" id="gif-name" placeholder="hello.gif">
           </label>
@@ -347,7 +511,7 @@
     </div>
   </div>
   <div class="foot">
-    <button type="button" class="btn" id="gif-back" hidden>Back</button>
+    <button type="button" class="btn" id="gif-back" hidden>← Back</button>
     <div class="spacer"></div>
     <button type="button" class="btn" id="gif-close">Close</button>
     <button type="button" class="btn primary" id="gif-keep" hidden>Add to library</button>
@@ -356,7 +520,7 @@
 
 <!-- ---------------------------------------------------- sound import -->
 <dialog id="sound-dialog" class="wide">
-  <div class="head" id="sound-dialog-title">Find a sound</div>
+  <div class="head"><span class="bg-brand grid size-8 place-items-center rounded-xl text-white"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8.6 2.6 5 5.6H2.6v4.8H5l3.6 3V2.6Z"/><path d="M11.4 5.9a3.4 3.4 0 0 1 0 4.2M13.3 4a6 6 0 0 1 0 8"/></svg></span><span id="sound-dialog-title">Find a sound</span></div>
   <div class="content">
     <div id="sound-find">
       <form class="search-row" id="sound-search-form">
@@ -367,30 +531,30 @@
         Searching needs a free Freesound key in <code>FREESOUND_API_KEY</code>.
         Pasting a link below works without one.
       </p>
-      <div id="sound-results"></div>
+      <div id="sound-results" class="stagger my-3"></div>
       <button type="button" class="btn small" id="sound-more" hidden>More results</button>
-      <form class="search-row" id="sound-link-form" style="margin-top:16px">
+      <form class="search-row mt-4" id="sound-link-form">
         <input type="text" id="sound-link" placeholder="…or paste a link to an audio file" autocomplete="off">
         <button type="submit" class="btn">Import</button>
       </form>
-      <p class="sub" id="sound-video-hint" style="margin-top:6px"></p>
+      <p class="sub mt-1.5 !text-[13px]" id="sound-video-hint"></p>
     </div>
 
     <div id="sound-edit" hidden>
       <!-- Played by the buttons and the waveform; its own controls only appear
            if the waveform cannot be drawn, so there is always some way to listen. -->
-      <audio id="sound-source" preload="auto" style="width:100%"></audio>
+      <audio id="sound-source" preload="auto" class="w-full"></audio>
 
       <div class="wave-bar">
         <button type="button" class="btn small primary" id="wave-play-sel" title="Play what you have selected (Space)"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.4 2.8 12.6 8l-8.2 5.2V2.8Z"/></svg>Play selection</button>
         <button type="button" class="btn small" id="wave-play-cursor" title="Play from the cursor"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.4 2.8 12.6 8l-8.2 5.2V2.8Z"/></svg>From <span id="wave-cursor-label">0.0s</span></button>
-        <button type="button" class="btn small" id="wave-stop" title="Stop" aria-label="Stop"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1"/></svg></button>
+        <button type="button" class="btn small icon" id="wave-stop" title="Stop" aria-label="Stop"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1"/></svg></button>
         <div class="spacer"></div>
-        <div class="zoom" role="group" aria-label="Zoom">
-          <button type="button" class="btn small" id="wave-zoom-out" title="Zoom out" aria-label="Zoom out"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8h9.6"/></svg></button>
-          <button type="button" class="btn small" id="wave-zoom-in" title="Zoom in (Ctrl or ⌘ + scroll)" aria-label="Zoom in"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg></button>
-          <button type="button" class="btn small" id="wave-zoom-sel" title="Zoom to the selection">Selection</button>
-          <button type="button" class="btn small" id="wave-zoom-fit" title="Show the whole sound">All</button>
+        <div class="zoom segmented" role="group" aria-label="Zoom">
+          <button type="button" id="wave-zoom-out" title="Zoom out" aria-label="Zoom out"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8h9.6"/></svg></button>
+          <button type="button" id="wave-zoom-in" title="Zoom in (Ctrl or ⌘ + scroll)" aria-label="Zoom in"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg></button>
+          <button type="button" id="wave-zoom-sel" title="Zoom to the selection">Selection</button>
+          <button type="button" id="wave-zoom-fit" title="Show the whole sound">All</button>
         </div>
       </div>
 
@@ -423,18 +587,18 @@
             <button type="button" class="btn small" id="sound-mark-end" title="End at the cursor">Here</button>
           </div>
         </label>
-        <label class="field narrow">
+        <label class="field">
           <span>Fade in</span>
           <input type="number" id="sound-fade-in" min="0" max="5" step="0.1" value="0">
         </label>
-        <label class="field narrow">
+        <label class="field">
           <span>Fade out</span>
           <input type="number" id="sound-fade-out" min="0" max="5" step="0.1" value="0">
         </label>
       </div>
-      <p class="sub" id="sound-length"></p>
+      <p class="sub mt-2 !text-[13px]" id="sound-length"></p>
 
-      <label class="field" style="margin-top:12px">
+      <label class="field mt-4">
         <span>Name</span>
         <input type="text" id="sound-name" maxlength="60">
       </label>
@@ -450,14 +614,14 @@
             <span class="hint">— otherwise it goes on when a theme needs it</span></span>
         </label>
         <div class="result" id="sound-result" hidden>
-          <audio id="sound-result-audio" controls style="width:100%"></audio>
+          <audio id="sound-result-audio" controls class="w-full"></audio>
           <div class="facts" id="sound-result-facts"></div>
         </div>
       </details>
     </div>
   </div>
   <div class="foot">
-    <button type="button" class="btn" id="sound-back" hidden>Back</button>
+    <button type="button" class="btn" id="sound-back" hidden>← Back</button>
     <div class="spacer"></div>
     <button type="button" class="btn" id="sound-close">Close</button>
     <button type="button" class="btn" id="sound-preview" hidden title="Hear exactly what will be saved - trimmed, faded and levelled">Hear the result</button>
@@ -467,10 +631,9 @@
 
 <dialog id="account-dialog">
   <form method="dialog" id="password-form">
-    <div class="head">Account</div>
+    <div class="head"><span class="bg-brand grid size-8 place-items-center rounded-full text-sm font-bold uppercase text-white" id="avatar-big">?</span><span>Signed in as <span id="who"></span></span></div>
     <div class="content">
-      <p class="sub">Signed in as <strong id="who"></strong>.</p>
-      <h3>Change password</h3>
+      <h3 class="mb-3">Change password</h3>
       <label class="field">
         <span>Current password</span>
         <input type="password" id="p-current" autocomplete="current-password" required>
@@ -479,11 +642,11 @@
         <span>New password <span class="hint">— at least 10 characters</span></span>
         <input type="password" id="p-next" autocomplete="new-password" required minlength="10">
       </label>
-      <label class="field" style="margin-bottom:0">
+      <label class="field !mb-0">
         <span>Confirm new password</span>
         <input type="password" id="p-next2" autocomplete="new-password" required minlength="10">
       </label>
-      <p class="sub" style="margin:12px 0 0">
+      <p class="sub mt-3 !text-[13px]">
         Changing it signs out every other session, which is the point of
         changing it.
       </p>
@@ -497,7 +660,35 @@
   </form>
 </dialog>
 
-<div id="toasts"></div>
+<!-- One dialog for every question: confirmations, a new name, a choice
+     from a list. Filled in by ask() in app.js; replaces the browser's own
+     confirm and prompt boxes, which cannot be styled and block the page. -->
+<dialog id="ask-dialog">
+  <form method="dialog" id="ask-form">
+    <div class="head"><span class="grid size-8 place-items-center rounded-xl bg-accent-soft text-accent" id="ask-icon"></span><span id="ask-title"></span></div>
+    <div class="content">
+      <p class="sub" id="ask-body"></p>
+      <div class="mt-4 grid gap-2" id="ask-choices" hidden></div>
+      <label class="field !mb-0 mt-4" id="ask-input-field" hidden>
+        <span id="ask-input-label"></span>
+        <input type="text" id="ask-input" maxlength="80">
+      </label>
+    </div>
+    <div class="foot">
+      <button type="button" class="btn" id="ask-cancel">Cancel</button>
+      <button type="submit" class="btn primary" id="ask-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="drop" class="pointer-events-none fixed inset-4 z-[150] grid place-items-center rounded-3xl border-2 border-dashed border-accent bg-surface/80 backdrop-blur-md" hidden>
+  <div class="enter flex flex-col items-center gap-3 text-center">
+    <div class="bg-brand grid size-16 place-items-center rounded-2xl text-white shadow-lift"><svg class="ico size-8" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10.8V2.4M4.6 5.8 8 2.4l3.4 3.4"/><path d="M2.6 10.6v2a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-2"/></svg></div>
+    <div class="text-lg font-bold">Drop <span id="drop-what">it</span> to upload</div>
+  </div>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

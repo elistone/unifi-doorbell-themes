@@ -131,6 +131,36 @@ describe("themes", () => {
   });
 });
 
+describe("stats", () => {
+  it("counts each day's runs by outcome and names the themes shown", async () => {
+    store.upsertTheme({
+      id: "everyday", name: "Everyday", image: "hash-everyday", priority: 0,
+      enabled: true, rules: [{}], devices: [],
+    });
+    const today = new Date();
+    today.setHours(6, 0, 0, 0);
+    const yesterday = new Date(today.getTime() - 86_400_000);
+    store.recordApply({ at: yesterday.toISOString(), deviceId: "front", themeId: "everyday", assetName: null, reason: "r", outcome: "applied" });
+    store.recordApply({ at: today.toISOString(), deviceId: "front", themeId: "everyday", assetName: null, reason: "r", outcome: "unchanged" });
+    store.recordApply({ at: today.toISOString(), deviceId: "back", themeId: null, assetName: null, reason: "r", outcome: "failed" });
+
+    const all = (await api.routes["GET /api/stats"](undefined as never, url("/api/stats?days=2"))) as {
+      days: Array<{ changed: number; unchanged: number; failed: number }>;
+      themes: Array<{ themeId: string; name: string; count: number }>;
+    };
+    assert.deepEqual(
+      all.days.map((d) => [d.changed, d.unchanged, d.failed]),
+      [[1, 0, 0], [0, 1, 1]],
+    );
+    assert.deepEqual(all.themes, [{ themeId: "everyday", name: "Everyday", count: 2 }]);
+
+    const front = (await api.routes["GET /api/stats"](undefined as never, url("/api/stats?days=2&device=front"))) as {
+      days: Array<{ failed: number }>;
+    };
+    assert.equal(front.days[1].failed, 0, "another doorbell's failure is not this one's");
+  });
+});
+
 describe("calendar", () => {
   it("previews the real decision for each day, not an approximation", async () => {
     store.upsertTheme({
