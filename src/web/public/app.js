@@ -201,14 +201,37 @@ let sounds = { ringtones: [], limit: 12 };
 
 const TABS = ["now", "themes", "media", "sounds", "calendar", "history", "settings"];
 
-function show(tab) {
+/**
+ * Each tab's address and the name in the browser's title bar. Real paths,
+ * so a tab can be bookmarked, opened in a new browser tab, and reached with
+ * Back and Forward; the server answers every one of them with this page.
+ */
+const PAGES = {
+  now: { path: "/", title: "Now" },
+  themes: { path: "/themes", title: "Themes" },
+  media: { path: "/images", title: "Images" },
+  sounds: { path: "/sounds", title: "Sounds" },
+  calendar: { path: "/calendar", title: "Calendar" },
+  history: { path: "/history", title: "History" },
+  settings: { path: "/settings", title: "Settings" },
+};
+
+const tabAt = (pathname) => TABS.find((t) => PAGES[t].path === pathname) ?? "now";
+
+/**
+ * Show a tab. `push` adds a history entry; going Back or Forward passes
+ * false, because the browser has already moved and a push would wipe out
+ * the entries ahead.
+ */
+function show(tab, { push = true } = {}) {
   if (!TABS.includes(tab)) return;
   for (const name of TABS) $(`#tab-${name}`).hidden = name !== tab;
-  for (const button of $$("nav button")) {
-    if (button.dataset.tab === tab) button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
+  for (const link of $$("nav [data-tab]")) {
+    if (link.dataset.tab === tab) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
   }
-  location.hash = tab;
+  document.title = `${PAGES[tab].title} · Doorman`;
+  if (push && location.pathname !== PAGES[tab].path) history.pushState(null, "", PAGES[tab].path);
 
   // Back to the top. Arriving at a new tab already scrolled halfway down
   // the previous one is disorienting, and the calendar and image grid are
@@ -237,10 +260,22 @@ const TAB_CONTENT = {
   settings: "#devices-list",
 };
 
-// [data-tab] rather than every button in the nav: the account button lives
+// [data-tab] rather than everything in the nav: the account button lives
 // there too, and without the filter clicking it called show(undefined),
 // which hid every section and left a blank page behind the dialog.
-$$("nav button[data-tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
+//
+// These are links, so a middle click, Cmd/Ctrl-click or Shift-click is left
+// to the browser and opens the tab somewhere new; only a plain click is
+// handled here, without reloading the page.
+$$("nav a[data-tab]").forEach((link) =>
+  link.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    show(link.dataset.tab);
+  }),
+);
+
+window.addEventListener("popstate", () => show(tabAt(location.pathname), { push: false }));
 
 // -------------------------------------------------------------- Now panel
 
@@ -328,9 +363,13 @@ function doorbellCard(d) {
 /** Summarise an apply that may have covered several doorbells. */
 function reportApplies(results) {
   for (const r of results) {
+    // A ring sound that failed leaves the outcome "unchanged" or "applied",
+    // because the image is fine - so it has to be said first, and in red,
+    // or a green toast reads as success.
+    const soundFailed = r.sound === "failed";
     toast(
-      `${r.deviceName ? `${r.deviceName}: ` : ""}${r.outcome} — ${r.reason}`,
-      r.outcome === "failed" ? "bad" : "ok",
+      `${r.deviceName ? `${r.deviceName}: ` : ""}${soundFailed ? "ring sound NOT set; image " : ""}${r.outcome} — ${r.reason}`,
+      r.outcome === "failed" || soundFailed ? "bad" : "ok",
     );
   }
 }
@@ -1231,6 +1270,7 @@ $("#upload-sound").addEventListener("change", async (event) => {
     soundView("edit");
     $("#sound-back").hidden = true; // nothing was searched, so nothing to go back to
     $("#sound-dialog").showModal();
+    $("#wave-play-sel").focus(); // showModal moves focus itself
   } catch (error) {
     toast(error.message, "bad");
   } finally {
@@ -1521,6 +1561,10 @@ function soundView(view) {
   $("#sound-edit").hidden = view !== "edit";
   $("#sound-back").hidden = view !== "edit";
   $("#sound-keep").hidden = view !== "edit";
+  $("#sound-preview").hidden = view !== "edit";
+  // Otherwise focus is left on whatever the dialog picked - More options, as
+  // it happens, where the next Space opens it instead of playing.
+  if (view === "edit") $("#wave-play-sel").focus();
   $("#sound-dialog-title").textContent =
     view === "edit" ? "Trim the sound" : sound.replaces ? `Replace "${sound.replaces.name}"` : "Find a sound";
 }
@@ -1634,14 +1678,34 @@ async function stageSound(request, suggestedName) {
  * The Start/End/Fade number fields are the one source of truth. Dragging a
  * handle writes to them, typing in them moves the handles, and the render
  * reads them - so the picture and the request sent can never disagree.
+ *
+ * `view` is the stretch of the sound on screen, in seconds: all of it until
+ * someone zooms. Zoomed in, the server decodes just that stretch again
+ * (`detail`), because the overview's thousand slices across a long song are
+ * too coarse to see where a word starts.
  */
-const wave = { peaks: null, duration: 0, cursor: 0, stopAt: null, frame: 0 };
+const wave = {
+  peaks: null,
+  duration: 0,
+  cursor: 0,
+  stopAt: null,
+  frame: 0,
+  view: { from: 0, to: 0 },
+  detail: null,
+  detailTimer: 0,
+  gain: 1,
+};
+
+/** The narrowest the view gets: a quarter of a second fills the width. */
+const MIN_SPAN = 0.25;
 
 const selection = () => ({ start: Number($("#sound-start").value) || 0, end: Number($("#sound-end").value) || 0 });
 const fades = () => ({
   in: clamp(Number($("#sound-fade-in").value) || 0, 0, 5),
   out: clamp(Number($("#sound-fade-out").value) || 0, 0, 5),
 });
+const span = () => wave.view.to - wave.view.from;
+const zoomed = () => span() < wave.duration - 1e-6;
 
 function showStagedSound(staged, suggestedName) {
   sound.staged = staged;
@@ -1663,8 +1727,11 @@ function showStagedSound(staged, suggestedName) {
   $("#sound-result").hidden = true;
 
   wave.peaks = null;
+  wave.detail = null;
+  wave.gain = 1;
   wave.duration = staged.durationSeconds;
   wave.cursor = 0;
+  wave.view = { from: 0, to: staged.durationSeconds };
   $("#wave").hidden = false;
   $("#wave-msg").hidden = false;
   updateSoundLength();
@@ -1674,9 +1741,15 @@ function showStagedSound(staged, suggestedName) {
 
 async function loadPeaks(id) {
   try {
-    const { peaks } = await api(`/api/staging/peaks?id=${encodeURIComponent(id)}&buckets=1000`);
+    const { peaks } = await api(`/api/staging/peaks?id=${encodeURIComponent(id)}&buckets=2000`);
     if (sound.staged?.id !== id) return; // another sound was opened meanwhile
     wave.peaks = peaks;
+    // Drawn to the loudest moment rather than to full scale, so a quiet
+    // recording still shows its shape - and the gaps between words, which
+    // are where a cut wants to go. Capped, or near-silence would become
+    // a wall of hiss.
+    const loudest = peaks.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    wave.gain = loudest > 0 ? Math.min(0.95 / loudest, 8) : 1;
     $("#wave-msg").hidden = true;
   } catch {
     if (sound.staged?.id !== id) return;
@@ -1687,6 +1760,74 @@ async function loadPeaks(id) {
   drawWave();
 }
 
+/**
+ * Fetch real detail for what is on screen, a moment after the view stops
+ * changing. Half a view extra each side, so a small scroll stays sharp.
+ */
+function scheduleDetail() {
+  clearTimeout(wave.detailTimer);
+  if (!zoomed() || !sound.staged) {
+    wave.detail = null;
+    return;
+  }
+  const d = wave.detail;
+  if (d && d.from <= wave.view.from && d.to >= wave.view.to && d.to - d.from <= span() * 3) return;
+
+  wave.detailTimer = setTimeout(async () => {
+    const id = sound.staged?.id;
+    const from = Math.max(0, wave.view.from - span() / 2);
+    const to = Math.min(wave.duration, wave.view.to + span() / 2);
+    const buckets = clamp(Math.round($("#wave-canvas").clientWidth * 2 * ((to - from) / span())), 200, 4000);
+    try {
+      const { peaks } = await api(
+        `/api/staging/peaks?id=${encodeURIComponent(id)}&buckets=${buckets}&start=${from.toFixed(3)}&end=${to.toFixed(3)}`,
+      );
+      if (sound.staged?.id !== id) return;
+      wave.detail = { from, to, peaks };
+      drawWave();
+    } catch {
+      // The overview, stretched, is still a usable picture.
+    }
+  }, 150);
+}
+
+/** Show `from`..`to`, kept inside the sound and no narrower than MIN_SPAN. */
+function setView(from, to) {
+  const width = clamp(to - from, Math.min(MIN_SPAN, wave.duration), wave.duration);
+  const start = clamp(from, 0, wave.duration - width);
+  wave.view = { from: start, to: start + width };
+  scheduleDetail();
+  drawWave();
+}
+
+/** Zoom by `factor` (under 1 is in), keeping the moment `around` where it is. */
+function zoomBy(factor, around) {
+  const { from } = wave.view;
+  const at = around ?? (wave.cursor >= from && wave.cursor <= wave.view.to ? wave.cursor : from + span() / 2);
+  const width = clamp(span() * factor, Math.min(MIN_SPAN, wave.duration), wave.duration);
+  const left = at - (at - from) * (width / span());
+  setView(left, left + width);
+}
+
+/** The quietest and loudest sample between two moments, from the sharpest data there is. */
+function peakBetween(t0, t1) {
+  const d = wave.detail;
+  const src =
+    d && t0 >= d.from && t1 <= d.to ? d : wave.peaks ? { from: 0, to: wave.duration, peaks: wave.peaks } : null;
+  if (!src) return null;
+  const n = src.peaks.length / 2;
+  const len = src.to - src.from;
+  const b0 = clamp(Math.floor(((t0 - src.from) / len) * n), 0, n - 1);
+  const b1 = clamp(Math.ceil(((t1 - src.from) / len) * n), b0 + 1, n);
+  let lo = 0;
+  let hi = 0;
+  for (let b = b0; b < b1; b++) {
+    lo = Math.min(lo, src.peaks[b * 2]);
+    hi = Math.max(hi, src.peaks[b * 2 + 1]);
+  }
+  return [lo, hi];
+}
+
 /** How loud a moment in the clip ends up, 0..1, once the fades apply. */
 function envelope(t, start, end, f) {
   let gain = 1;
@@ -1695,27 +1836,11 @@ function envelope(t, start, end, f) {
   return clamp(gain, 0, 1);
 }
 
-function drawWave() {
-  const box = $("#wave");
-  const canvas = $("#wave-canvas");
-  const { start, end } = selection();
-  $("#wave-cursor-label").textContent = secs(wave.cursor);
-  if (box.hidden || !wave.duration) return;
-
-  // Handles are positioned in percent, so they are right even before the
-  // canvas has a size to draw at.
-  for (const [id, t] of [["#wave-start", start], ["#wave-end", end]]) {
-    const handle = $(id);
-    handle.style.left = `${(clamp(t, 0, wave.duration) / wave.duration) * 100}%`;
-    handle.setAttribute("aria-valuemin", "0");
-    handle.setAttribute("aria-valuemax", wave.duration.toFixed(2));
-    handle.setAttribute("aria-valuenow", t.toFixed(2));
-    handle.setAttribute("aria-valuetext", secs(t));
-  }
-
+/** A canvas sized for the screen it is on, cleared, with its CSS size. */
+function prepare(canvas) {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
-  if (!width || !height) return;
+  if (!width || !height) return null;
   const dpr = window.devicePixelRatio || 1;
   if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
     canvas.width = Math.round(width * dpr);
@@ -1724,57 +1849,146 @@ function drawWave() {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
+  return { ctx, width, height };
+}
+
+/** Tick spacing that leaves room for a label every 70px or so. */
+function tickStep(seconds, width) {
+  const steps = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
+  return steps.find((step) => seconds / step <= width / 70) ?? 600;
+}
+
+function drawWave() {
+  const box = $("#wave");
+  const { start, end } = selection();
+  $("#wave-cursor-label").textContent = secs(wave.cursor);
+  if (box.hidden || !wave.duration) return;
+  const { from, to } = wave.view;
+  const width0 = to - from;
+
+  // Handles are positioned in percent, so they are right even before the
+  // canvas has a size to draw at. Off screen when zoomed past them.
+  for (const [id, t] of [["#wave-start", start], ["#wave-end", end]]) {
+    const handle = $(id);
+    handle.hidden = t < from - 1e-6 || t > to + 1e-6;
+    const at = (t - from) / width0;
+    handle.style.left = `${at * 100}%`;
+    // The time tab leans inwards at the ends, rather than hanging off them.
+    const label = handle.querySelector(".wave-time");
+    label.textContent = `${t.toFixed(2)}s`;
+    label.style.transform = `translateX(${at < 0.06 ? "-12%" : at > 0.94 ? "-88%" : "-50%"})`;
+    handle.setAttribute("aria-valuemin", "0");
+    handle.setAttribute("aria-valuemax", wave.duration.toFixed(2));
+    handle.setAttribute("aria-valuenow", t.toFixed(2));
+    handle.setAttribute("aria-valuetext", secs(t));
+  }
 
   // Read from the theme each time, so a light/dark switch is picked up.
   const css = getComputedStyle(document.documentElement);
   const accent = css.getPropertyValue("--accent").trim();
   const faint = css.getPropertyValue("--text-faint").trim();
   const text = css.getPropertyValue("--text").trim();
-  const mid = height / 2;
   const f = fades();
 
-  if (wave.peaks) {
-    const buckets = wave.peaks.length / 2;
-    for (let x = 0; x < width; x++) {
-      const b = Math.min(buckets - 1, Math.floor((x / width) * buckets));
-      const lo = wave.peaks[b * 2];
-      const hi = wave.peaks[b * 2 + 1];
-      const t = (x / width) * wave.duration;
-      const inside = t >= start && t <= end;
-      const bar = (scale) => {
-        const top = mid - hi * mid * scale;
-        ctx.fillRect(x, top, 1, Math.max(1, mid - lo * mid * scale - top));
-      };
+  const main = prepare($("#wave-canvas"));
+  if (main) {
+    const { ctx, width, height } = main;
+    const mid = height / 2;
+    const perPx = width0 / width;
 
-      if (!inside) {
-        // Cut away: still visible, so you can see what you are leaving out.
-        ctx.globalAlpha = 0.45;
-        ctx.fillStyle = faint;
+    if (wave.peaks) {
+      for (let x = 0; x < width; x++) {
+        const t = from + x * perPx;
+        const peak = peakBetween(t, t + perPx);
+        if (!peak) break;
+        const [lo, hi] = peak;
+        const bar = (scale) => {
+          const top = mid - Math.min(1, hi * wave.gain) * mid * scale;
+          const bottom = mid - Math.max(-1, lo * wave.gain) * mid * scale;
+          ctx.fillRect(x, top, 1, Math.max(1, bottom - top));
+        };
+        if (t < start || t > end) {
+          // Cut away: still visible, so you can see what you are leaving out.
+          ctx.globalAlpha = 0.45;
+          ctx.fillStyle = faint;
+          bar(1);
+          continue;
+        }
+        // Kept: the full wave faintly, and what survives the fades solidly,
+        // so a fade reads as the shape it will give the sound.
+        ctx.fillStyle = accent;
+        ctx.globalAlpha = 0.25;
         bar(1);
-        continue;
+        ctx.globalAlpha = 1;
+        bar(envelope(t, start, end, f));
       }
-      // Kept: the full wave faintly, and what survives the fades solidly,
-      // so a fade reads as the shape it will give the sound.
-      ctx.fillStyle = accent;
-      ctx.globalAlpha = 0.25;
-      bar(1);
       ctx.globalAlpha = 1;
-      bar(envelope(t, start, end, f));
+    }
+
+    // A time ruler along the bottom, so a zoomed view says where it is.
+    const step = tickStep(width0, width);
+    ctx.fillStyle = faint;
+    ctx.font = `10px ${css.getPropertyValue("--mono")}`;
+    for (let t = Math.ceil(from / step) * step; t <= to; t += step) {
+      const x = Math.round(((t - from) / width0) * width);
+      ctx.globalAlpha = 0.5;
+      ctx.fillRect(x, height - 6, 1, 6);
+      ctx.globalAlpha = 0.9;
+      ctx.fillText(`${Number(t.toFixed(2))}s`, x + 3, height - 3);
     }
     ctx.globalAlpha = 1;
+
+    // The cursor: where "From" starts, and where Here takes its time.
+    if (wave.cursor >= from && wave.cursor <= to) {
+      ctx.fillStyle = text;
+      ctx.fillRect(Math.round(((wave.cursor - from) / width0) * width), 0, 1.5, height);
+    }
   }
 
-  // The cursor: where Play from starts, and where Here takes its time.
-  ctx.fillStyle = text;
-  ctx.fillRect(Math.round((wave.cursor / wave.duration) * width), 0, 1.5, height);
+  drawOverview(accent, faint, start, end);
 }
 
-new ResizeObserver(drawWave).observe($("#wave"));
+/** The whole sound, small, with the zoomed-in stretch boxed. Only shown zoomed. */
+function drawOverview(accent, faint, start, end) {
+  $("#wave-overview").hidden = !zoomed();
+  if (!zoomed()) return;
+  const view = $("#wave-view");
+  view.style.left = `${(wave.view.from / wave.duration) * 100}%`;
+  view.style.width = `${(span() / wave.duration) * 100}%`;
 
-/** Seconds at a point across the waveform. */
+  const mini = prepare($("#wave-overview-canvas"));
+  if (!mini || !wave.peaks) return;
+  const { ctx, width, height } = mini;
+  const mid = height / 2;
+  const perPx = wave.duration / width;
+  const n = wave.peaks.length / 2;
+  for (let x = 0; x < width; x++) {
+    const t = x * perPx;
+    const b0 = Math.floor((t / wave.duration) * n);
+    const b1 = Math.max(b0 + 1, Math.ceil(((t + perPx) / wave.duration) * n));
+    let lo = 0;
+    let hi = 0;
+    for (let b = b0; b < b1 && b < n; b++) {
+      lo = Math.min(lo, wave.peaks[b * 2]);
+      hi = Math.max(hi, wave.peaks[b * 2 + 1]);
+    }
+    ctx.fillStyle = t >= start && t <= end ? accent : faint;
+    ctx.globalAlpha = t >= start && t <= end ? 0.8 : 0.4;
+    const top = mid - Math.min(1, hi * wave.gain) * mid;
+    ctx.fillRect(x, top, 1, Math.max(1, mid - Math.max(-1, lo * wave.gain) * mid - top));
+  }
+  ctx.globalAlpha = 1;
+}
+
+new ResizeObserver(() => {
+  drawWave();
+  scheduleDetail();
+}).observe($("#wave"));
+
+/** Seconds at a point across the waveform, in whatever is on screen. */
 function timeAt(clientX) {
   const rect = $("#wave").getBoundingClientRect();
-  return clamp((clientX - rect.left) / rect.width, 0, 1) * wave.duration;
+  return wave.view.from + clamp((clientX - rect.left) / rect.width, 0, 1) * span();
 }
 
 /** Move one end of the selection, keeping them a tenth of a second apart. */
@@ -1803,9 +2017,11 @@ for (const [id, which] of [["#wave-start", "start"], ["#wave-end", "end"]]) {
   for (const type of ["pointerup", "pointercancel"]) {
     handle.addEventListener(type, () => delete handle.dataset.dragging);
   }
-  // A tenth of a second per press, a whole second with Shift.
+  // Finer the further in you are: a tenth of a second across a whole song,
+  // a hundredth when zoomed to a word. Shift moves ten times as far.
   handle.addEventListener("keydown", (event) => {
-    const step = event.shiftKey ? 1 : 0.1;
+    const fine = span() > 20 ? 0.1 : span() > 4 ? 0.05 : 0.01;
+    const step = event.shiftKey ? fine * 10 : fine;
     const delta = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
     if (!delta) return;
     event.preventDefault();
@@ -1813,19 +2029,78 @@ for (const [id, which] of [["#wave-start", "start"], ["#wave-end", "end"]]) {
   });
 }
 
+// Ctrl/Cmd + scroll (and a trackpad pinch, which arrives as one) zooms
+// around the pointer; scrolling sideways moves along. Plain vertical
+// scrolling is left alone so the dialog still scrolls.
+$("#wave").addEventListener(
+  "wheel",
+  (event) => {
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      zoomBy(Math.exp(clamp(event.deltaY, -50, 50) * 0.01), timeAt(event.clientX));
+      return;
+    }
+    const sideways = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.shiftKey ? event.deltaY : 0;
+    if (!sideways || !zoomed()) return;
+    event.preventDefault();
+    const shift = (sideways / $("#wave").clientWidth) * span();
+    setView(wave.view.from + shift, wave.view.to + shift);
+  },
+  { passive: false },
+);
+
+$("#wave-zoom-in").addEventListener("click", () => zoomBy(0.5));
+$("#wave-zoom-out").addEventListener("click", () => zoomBy(2));
+$("#wave-zoom-fit").addEventListener("click", () => setView(0, wave.duration));
+$("#wave-zoom-sel").addEventListener("click", () => {
+  const { start, end } = selection();
+  const pad = (end - start) * 0.08;
+  setView(start - pad, end + pad);
+});
+
+// The overview: press anywhere to centre the view there, or drag the box.
+{
+  const overview = $("#wave-overview");
+  let grab = null;
+  const timeOnOverview = (clientX) => {
+    const rect = overview.getBoundingClientRect();
+    return clamp((clientX - rect.left) / rect.width, 0, 1) * wave.duration;
+  };
+  overview.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    overview.setPointerCapture(event.pointerId);
+    const t = timeOnOverview(event.clientX);
+    // Inside the box, hold it where it was grabbed; outside, centre on it.
+    grab = t >= wave.view.from && t <= wave.view.to ? t - wave.view.from : span() / 2;
+    setView(t - grab, t - grab + span());
+  });
+  overview.addEventListener("pointermove", (event) => {
+    if (grab === null) return;
+    const t = timeOnOverview(event.clientX);
+    setView(t - grab, t - grab + span());
+  });
+  for (const type of ["pointerup", "pointercancel"]) overview.addEventListener(type, () => (grab = null));
+}
+
 /**
  * Play from a moment, stopping at `stopAt` if given. Driven by animation
  * frames rather than timeupdate, which fires only a few times a second -
  * too coarse to stop on a cut or to move the cursor smoothly.
  */
-function playFrom(t, stopAt) {
+async function playFrom(t, stopAt) {
   const audio = $("#sound-source");
   stopListening();
+  $("#sound-result-audio").pause();
+  cancelAnimationFrame(wave.frame);
   wave.cursor = t;
   wave.stopAt = stopAt;
+  // A seek before the browser knows how long the file is can be ignored,
+  // and playback then starts from zero.
+  if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
+    await new Promise((resolve) => audio.addEventListener("loadedmetadata", resolve, { once: true }));
+  }
   audio.currentTime = t;
   audio.play().catch((error) => toast(error.message, "bad"));
-  cancelAnimationFrame(wave.frame);
   const step = () => {
     if (audio.paused) return drawWave();
     if (wave.stopAt !== null && audio.currentTime >= wave.stopAt) {
@@ -1834,7 +2109,12 @@ function playFrom(t, stopAt) {
       return drawWave();
     }
     wave.cursor = audio.currentTime;
-    drawWave();
+    // Zoomed in, the view turns the page as playback runs off its edge.
+    if (zoomed() && (wave.cursor > wave.view.to || wave.cursor < wave.view.from)) {
+      setView(wave.cursor - span() * 0.05, wave.cursor + span() * 0.95);
+    } else {
+      drawWave();
+    }
     wave.frame = requestAnimationFrame(step);
   };
   wave.frame = requestAnimationFrame(step);
@@ -1848,14 +2128,24 @@ function stopWave() {
 
 /** Up to the end of the selection when starting inside it; to the end otherwise. */
 const playFromHere = (t) => playFrom(t, t < selection().end ? selection().end : null);
+const playSelection = () => playFrom(selection().start, selection().end);
 
 $("#wave").addEventListener("pointerdown", (event) => {
   if (event.target.closest(".wave-handle")) return;
   playFromHere(timeAt(event.clientX));
 });
-$("#wave-play-sel").addEventListener("click", () => playFrom(selection().start, selection().end));
+$("#wave-play-sel").addEventListener("click", playSelection);
 $("#wave-play-cursor").addEventListener("click", () => playFromHere(wave.cursor));
 $("#wave-stop").addEventListener("click", stopWave);
+
+// Space plays the selection, or stops - except while typing in a field.
+$("#sound-dialog").addEventListener("keydown", (event) => {
+  if (event.key !== " " || $("#sound-edit").hidden) return;
+  if (event.target.closest("input, textarea, select, button, summary")) return;
+  event.preventDefault();
+  if ($("#sound-source").paused) playSelection();
+  else stopWave();
+});
 
 // With no waveform, the native controls are how you listen; keep the
 // cursor following them so Here still means "where I paused".
@@ -1910,9 +2200,13 @@ async function renderSoundPreview() {
   return result;
 }
 
+// Renders exactly what will be saved and plays it. The player for it sits
+// under More options; this button is the usual way to hear it.
 $("#sound-preview").addEventListener("click", (e) =>
   withBusy(e.currentTarget, async () => {
-    await renderSoundPreview();
+    stopWave();
+    if (!sound.rendered) await renderSoundPreview();
+    $("#sound-result-audio").currentTime = 0;
     $("#sound-result-audio").play().catch(() => {});
   }),
 );
@@ -2211,8 +2505,13 @@ async function start() {
   } catch (error) {
     toast(error.message, "bad");
   }
-  const initial = location.hash.slice(1);
-  if (TABS.includes(initial) && initial !== "now") show(initial);
+  // Links and bookmarks from before tabs had paths used #fragments.
+  const legacy = location.hash.slice(1);
+  if (TABS.includes(legacy)) history.replaceState(null, "", PAGES[legacy].path);
+
+  const initial = tabAt(location.pathname);
+  document.title = `${PAGES[initial].title} · Doorman`;
+  if (initial !== "now") show(initial, { push: false });
 }
 
 async function boot() {

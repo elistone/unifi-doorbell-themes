@@ -239,18 +239,36 @@ export function peaksOf(samples: Int16Array, buckets: number): number[] {
 }
 
 /**
+ * The ffmpeg arguments for raw samples to draw from - of the whole file, or
+ * of just `window` seconds of it when the editor is zoomed in. A window is
+ * decoded afresh rather than cut from the overview, because the overview's
+ * thousand slices across a three-minute song are a sixth of a second each:
+ * far too coarse to see where a word starts.
+ */
+export function peaksArgs(input: string, window?: { start: number; end: number }): string[] {
+  const seek =
+    window && window.end > window.start
+      ? ["-ss", window.start.toFixed(3), "-t", (window.end - window.start).toFixed(3)]
+      : [];
+  return ["-v", "error", ...seek, "-i", input, "-vn", "-ac", "1", "-ar", String(PEAK_RATE), "-f", "s16le", "-"];
+}
+
+/**
  * Waveform data for any file ffmpeg can read.
  *
  * Done here rather than by decoding in the browser, because what comes out
  * of YouTube is usually WebM/Opus, which not every browser can decode - and
  * the editor is most needed for exactly those long clips.
  */
-export async function audioPeaks(path: string, buckets = 800): Promise<{ peaks: number[]; durationSeconds: number }> {
-  const { stdout } = await run(
-    FFMPEG,
-    ["-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", String(PEAK_RATE), "-f", "s16le", "-"],
-    { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 },
-  );
+export async function audioPeaks(
+  path: string,
+  buckets = 800,
+  window?: { start: number; end: number },
+): Promise<{ peaks: number[]; durationSeconds: number }> {
+  const { stdout } = await run(FFMPEG, peaksArgs(path, window), {
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024,
+  });
   // Copied out, because the Buffer may not start on an even byte offset and
   // an Int16Array view needs one.
   const pcm = stdout as unknown as Buffer;

@@ -4,6 +4,7 @@ import { ALWAYS_SAFE_FRAMES } from "../src/media/analyse.ts";
 import {
   MAX_FADE_SECONDS,
   audioEditArgs,
+  peaksArgs,
   peaksOf,
   centreCrop,
   clampCrop,
@@ -147,5 +148,20 @@ describe("waveform peaks", () => {
 
   it("returns nothing for silence of no length", () => {
     assert.deepEqual(peaksOf(new Int16Array(0), 10), []);
+  });
+});
+
+describe("waveform of a window", () => {
+  it("decodes only the part on screen when zoomed in", () => {
+    const args = peaksArgs("in.webm", { start: 12.5, end: 14 });
+    assert.equal(filterOf(args, "-ss"), "12.500");
+    assert.equal(filterOf(args, "-t"), "1.500");
+    // Before -i, so ffmpeg seeks rather than decoding up to it.
+    assert.ok(args.indexOf("-ss") < args.indexOf("-i"));
+  });
+
+  it("decodes the whole file without one", () => {
+    assert.ok(!peaksArgs("in.webm").includes("-ss"));
+    assert.ok(!peaksArgs("in.webm", { start: 3, end: 3 }).includes("-ss"));
   });
 });

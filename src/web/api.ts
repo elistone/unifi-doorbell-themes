@@ -29,6 +29,7 @@ import { Staging } from "../media/staging.ts";
 import { brokenSounds, isLibraryRef, libraryHash, libraryRef, relinkSounds, soundStatus } from "../sounds.ts";
 import type { SoundLibrary } from "../media/soundlib.ts";
 import type { RingtoneCache } from "../ringtones.ts";
+import { sendBytes } from "./range.ts";
 import { MAX_RINGTONES } from "../device/private.ts";
 import type { PrivateApi } from "../device/private.ts";
 import type { Protect } from "../device/protect.ts";
@@ -770,7 +771,15 @@ export function createApi(deps: ApiDeps) {
       const path = stagedPath(url.searchParams.get("id"));
       await assertStaged(path);
       const buckets = Math.min(Math.max(Number(url.searchParams.get("buckets")) || 800, 50), 4000);
-      return asBadRequest(() => audioPeaks(path, buckets));
+      // A window, when the editor is zoomed in: decoded on its own so the
+      // detail is real rather than the overview stretched.
+      const start = Number(url.searchParams.get("start"));
+      const end = Number(url.searchParams.get("end"));
+      const window =
+        url.searchParams.has("start") && Number.isFinite(start) && Number.isFinite(end) && end > start && start >= 0
+          ? { start, end }
+          : undefined;
+      return asBadRequest(() => audioPeaks(path, buckets, window));
     },
 
     /** Trim and normalise a staged sound into a staged MP3, for preview. */
@@ -1305,35 +1314,42 @@ export function createApi(deps: ApiDeps) {
   }
 
   /** A staged import, for the editor to show or play. */
-  async function serveStaged(id: string, res: ServerResponse): Promise<void> {
+  async function serveStaged(id: string, res: ServerResponse, range?: string): Promise<void> {
     const path = staging.path(id);
     if (!path) throw new HttpError(404, "No such import.");
     const bytes = await readFile(path).catch(() => {
       throw new HttpError(404, "That import has expired.");
     });
-    res.writeHead(200, {
-      "Content-Type": staging.typeOf(id),
-      "Content-Length": bytes.byteLength,
-      // The id is random and the file never changes under it.
-      "Cache-Control": "private, max-age=86400, immutable",
-      // Fetched from anywhere on the web, so doubly do not sniff it.
-      "X-Content-Type-Options": "nosniff",
-    });
-    res.end(bytes);
+    // In ranges, so the editor can seek - see range.ts.
+    sendBytes(
+      res,
+      bytes,
+      {
+        "Content-Type": staging.typeOf(id),
+        // The id is random and the file never changes under it.
+        "Cache-Control": "private, max-age=86400, immutable",
+        // Fetched from anywhere on the web, so doubly do not sniff it.
+        "X-Content-Type-Options": "nosniff",
+      },
+      range,
+    );
   }
 
   /** A library sound, for listening to on the Sounds tab. */
-  async function serveLibrarySound(hash: string, res: ServerResponse): Promise<void> {
+  async function serveLibrarySound(hash: string, res: ServerResponse, range?: string): Promise<void> {
     const found = deps.soundLibrary ? await deps.soundLibrary.read(hash) : null;
     if (!found) throw new HttpError(404, "That sound is not in the library.");
-    res.writeHead(200, {
-      "Content-Type": "audio/mpeg",
-      "Content-Length": found.bytes.byteLength,
-      // Addressed by content hash, so these bytes never change under it.
-      "Cache-Control": "private, max-age=31536000, immutable",
-      "X-Content-Type-Options": "nosniff",
-    });
-    res.end(found.bytes);
+    sendBytes(
+      res,
+      found.bytes,
+      {
+        "Content-Type": "audio/mpeg",
+        // Addressed by content hash, so these bytes never change under it.
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+      },
+      range,
+    );
   }
 
   return { routes, serveMedia, serveThumbnail, serveStaged, serveLibrarySound };

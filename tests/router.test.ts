@@ -134,6 +134,16 @@ describe("the gate", () => {
     }
   });
 
+  it("serves the page at every tab's own address, so links and Back work", async () => {
+    for (const path of ["/themes", "/images", "/sounds", "/calendar", "/history", "/settings"]) {
+      const response = await fetch(`${base}${path}`);
+      assert.equal(response.status, 200, path);
+      assert.match(await response.text(), /<title>/, path);
+    }
+    // Only those: anything else is still behind the gate.
+    assert.equal((await fetch(`${base}/secrets`)).status, 401);
+  });
+
   it("reports first-run before any account exists", async () => {
     const body = await (await fetch(`${base}/api/session`)).json();
     assert.equal(body.needsSetup, true);

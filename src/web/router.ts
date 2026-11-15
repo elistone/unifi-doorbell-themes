@@ -42,6 +42,15 @@ const PUBLIC_ROUTES = new Set([
 /** The login screen itself has to load before anyone can log in. */
 const PUBLIC_FILES = new Set(["/", "/index.html", "/style.css", "/app.js", "/favicon.ico"]);
 
+/**
+ * Each tab's own address, all answered with the one page - which reads the
+ * path and opens that tab. Real paths rather than #fragments, so a tab can
+ * be bookmarked, opened in a new tab, and gone back to. Public for the same
+ * reason "/" is: it is the login page until there is a session, and holds
+ * nothing but markup.
+ */
+export const PAGE_PATHS = new Set(["/themes", "/images", "/sounds", "/calendar", "/history", "/settings"]);
+
 export interface RouterDeps extends Omit<ApiDeps, "callerOf" | "sessionDigestOf"> {
   store: Store;
   /** Set the Secure flag on the session cookie. On when served over TLS. */
@@ -75,7 +84,7 @@ export function createHandler(deps: RouterDeps) {
 
     try {
       const isPublicRoute = PUBLIC_ROUTES.has(key);
-      const isPublicFile = method === "GET" && PUBLIC_FILES.has(url.pathname);
+      const isPublicFile = method === "GET" && (PUBLIC_FILES.has(url.pathname) || PAGE_PATHS.has(url.pathname));
 
       if (!isPublicRoute && !isPublicFile && callerOf(req) === null) {
         // 401 as JSON even for page requests: the UI is a single page that
@@ -100,13 +109,13 @@ export function createHandler(deps: RouterDeps) {
 
       // A ring sound from the library, to listen to.
       if (method === "GET" && url.pathname.startsWith("/library-sound/")) {
-        await serveLibrarySound(decodeURIComponent(url.pathname.slice("/library-sound/".length)), res);
+        await serveLibrarySound(decodeURIComponent(url.pathname.slice("/library-sound/".length)), res, req.headers.range);
         return;
       }
 
       // An import waiting in the editor.
       if (method === "GET" && url.pathname.startsWith("/staging/")) {
-        await serveStaged(decodeURIComponent(url.pathname.slice("/staging/".length)), res);
+        await serveStaged(decodeURIComponent(url.pathname.slice("/staging/".length)), res, req.headers.range);
         return;
       }
 
@@ -129,6 +138,7 @@ export function createHandler(deps: RouterDeps) {
         return;
       }
 
+      if (method === "GET" && PAGE_PATHS.has(url.pathname) && (await serveStatic("/", res))) return;
       if (method === "GET" && (await serveStatic(url.pathname, res))) return;
 
       send(404, { error: `No route for ${key}` });

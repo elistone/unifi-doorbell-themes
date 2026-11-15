@@ -5,6 +5,44 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **Every tab has its own address** - `/themes`, `/images`, `/sounds`,
+  `/calendar`, `/history`, `/settings`. Back and Forward move between tabs,
+  the nav items are real links (middle-click or Cmd/Ctrl-click opens one in
+  a new browser tab), and a tab can be bookmarked. Old `#sounds`-style
+  links still work. The browser tab's title names the page, as in
+  "Sounds · Doorman".
+- **Zoom in the sound editor.** The + and − buttons, Ctrl/⌘ + scroll or a
+  trackpad pinch zoom around the pointer; **Selection** zooms to what is
+  selected and **All** shows the whole sound. Zoomed in, the server decodes
+  just that stretch again, so the gaps between words are sharp rather than
+  the overview stretched. A strip underneath shows the whole sound with
+  where you are boxed; drag it, or scroll sideways, to move. Playback turns
+  the page as it runs off the edge. Arrow keys on a handle move it in finer
+  steps the further in you are.
+- The waveform is taller and drawn to the sound's loudest moment, so quiet
+  recordings and the silences in them show clearly. Each handle shows its
+  time, and a ruler along the bottom shows where you are.
+
+### Changed
+
+- **The sound editor is simpler.** Play controls and zoom sit above the
+  waveform, then Start, End and the fades in one row, then the name.
+  Volume levelling and "Put it on the doorbell now" are under More
+  options. **Hear the result** sits next to Add to library. Space plays
+  the selection.
+
+### Fixed
+
+- **Playing a selection played from the very start.** Sounds being trimmed
+  were served without byte ranges, and without those Chrome cannot seek an
+  audio file, so every jump to a point snapped back to zero. Library
+  sounds on the Sounds tab are served the same way now too.
+- **A ring sound that could not be set no longer shows as a green toast.**
+  The image being right made the result "unchanged", which read as
+  success. The toast now leads with "ring sound NOT set" and shows in red.
+
 ## 0.11.1 - 2026-11-15
 
 ### Fixed
