@@ -541,7 +541,8 @@ export function createApi(deps: ApiDeps) {
       const entries = await Promise.all(
         [...files.entries()].map(async ([hash, filename]) => {
           const path = join(mediaDir, filename);
-          const bytes = (await readFile(path)).byteLength;
+          // A stat, not a read: the size is all that is wanted here.
+          const bytes = (await stat(path)).size;
           let analysis: GifAnalysis | null = null;
           let analysisError: string | null = null;
           try {

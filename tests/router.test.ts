@@ -151,6 +151,26 @@ describe("the gate", () => {
   });
 });
 
+describe("caching", () => {
+  it("answers an unchanged GET with an empty 304", async () => {
+    const first = await fetch(`${base}/api/session`);
+    const etag = first.headers.get("etag");
+    assert.ok(etag, "a GET carries an ETag");
+    assert.match(first.headers.get("cache-control") ?? "", /no-cache/);
+
+    const again = await fetch(`${base}/api/session`, { headers: { "if-none-match": etag! } });
+    assert.equal(again.status, 304);
+    assert.equal(await again.text(), "");
+  });
+
+  it("answers in full once the answer has changed", async () => {
+    const before = (await fetch(`${base}/api/session`)).headers.get("etag")!;
+    await json("/api/setup", GOOD); // first run is over: the session answer changes
+    const after = await fetch(`${base}/api/session`, { headers: { "if-none-match": before } });
+    assert.equal(after.status, 200);
+  });
+});
+
 describe("setup", () => {
   it("creates the first account and signs it in", async () => {
     const response = await json("/api/setup", GOOD);

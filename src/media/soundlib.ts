@@ -18,6 +18,7 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hashBytes } from "../apply.ts";
+import { FileHashes } from "./hashes.ts";
 
 export interface LibrarySound {
   hash: string;
@@ -45,6 +46,7 @@ export function soundFilename(name: string): string {
 
 export class SoundLibrary {
   readonly dir: string;
+  readonly #hashes = new FileHashes();
 
   constructor(dir: string) {
     this.dir = dir;
@@ -53,17 +55,16 @@ export class SoundLibrary {
   async list(): Promise<LibrarySound[]> {
     const names = await readdir(this.dir).catch(() => [] as string[]);
     const sounds: LibrarySound[] = [];
+    const seen: string[] = [];
     for (const filename of names) {
       // Dotfiles include macOS's `._name.mp3` forks, which are not audio.
       if (filename.startsWith(".") || !filename.toLowerCase().endsWith(".mp3")) continue;
-      const bytes = await readFile(join(this.dir, filename));
-      sounds.push({
-        hash: hashBytes(bytes),
-        name: filename.slice(0, -4),
-        filename,
-        bytes: bytes.byteLength,
-      });
+      const path = join(this.dir, filename);
+      seen.push(path);
+      const { hash, bytes } = await this.#hashes.of(path);
+      sounds.push({ hash, name: filename.slice(0, -4), filename, bytes });
     }
+    this.#hashes.keepOnly(seen);
     return sounds.sort((a, b) => a.name.localeCompare(b.name));
   }
 

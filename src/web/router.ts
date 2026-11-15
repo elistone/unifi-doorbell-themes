@@ -5,6 +5,7 @@
  * Separate from both so that `serve.ts` has one line of HTTP in it and the
  * API module never has to know what a ServerResponse is.
  */
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError, createApi } from "./api.ts";
 import type { ApiDeps } from "./api.ts";
@@ -134,6 +135,10 @@ export function createHandler(deps: RouterDeps) {
           send(200, result, { "Set-Cookie": clearedCookie(secureCookies) });
           return;
         }
+        if (method === "GET") {
+          sendCacheable(req, res, result);
+          return;
+        }
         send(200, result);
         return;
       }
@@ -155,4 +160,26 @@ export function createHandler(deps: RouterDeps) {
       send(500, { error: message });
     }
   };
+}
+
+/**
+ * A GET answer the browser may keep and ask about again.
+ *
+ * The UI shows each tab's last answer straight away and then asks again in
+ * the background. Most of the time nothing has changed, and with an ETag
+ * that second answer is an empty 304 rather than the whole list again.
+ * `no-cache` means "check every time", not "do not store": nothing here is
+ * ever shown without the server having been asked.
+ */
+function sendCacheable(req: IncomingMessage, res: ServerResponse, body: unknown): void {
+  const text = JSON.stringify(body, null, 2);
+  const etag = `"${createHash("sha1").update(text).digest("base64url")}"`;
+  const headers = { "Cache-Control": "private, no-cache", ETag: etag };
+  if (req.headers["if-none-match"] === etag) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "application/json", ...headers });
+  res.end(text);
 }

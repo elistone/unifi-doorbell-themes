@@ -5,6 +5,21 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Changed
+
+- **Tabs appear at once instead of loading every time.** Each tab's last
+  answers are kept, in memory and across reloads and new browser tabs, and
+  drawn straight away; the server is asked again in the background and the
+  tab is only redrawn if something changed. Anything you change in Doorman
+  clears what was kept, so nothing you just deleted or renamed can show
+  again.
+- **API answers carry an ETag.** An unchanged answer comes back as an empty
+  304, so those background checks cost a few hundred bytes.
+- **The library is no longer re-read on every request.** Every GIF (50MB
+  of them on the household install) and every library sound was read and
+  hashed in full for the Now page, Themes and Images. Each file is now
+  hashed once and again only when its size or modification time changes.
+
 ## 0.12.0 - 2026-11-15
 
 ### Added

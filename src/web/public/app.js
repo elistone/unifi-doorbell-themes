@@ -50,6 +50,9 @@ function trackRequest(delta) {
 }
 
 async function api(path, options = {}) {
+  // Anything that changes something makes every saved answer suspect - a
+  // deleted sound must not be shown again from the cache a moment later.
+  if ((options.method ?? "GET") !== "GET") forgetCache();
   trackRequest(1);
   let response;
   let text;
@@ -70,11 +73,100 @@ async function api(path, options = {}) {
   if (response.status === 401 && !path.startsWith("/api/login")) {
     // The session went away - expired, swept, or revoked by a password
     // change elsewhere. Show the gate rather than a wall of failed requests.
+    // What was saved for the last session is not for whoever signs in next.
+    forgetCache();
     showGate();
     throw new Error("Your session ended. Sign in again.");
   }
   if (!response.ok) throw new Error(body?.error ?? `${response.status} ${response.statusText}`);
   return body;
+}
+
+/**
+ * Each tab's last answers, shown straight away and checked in the background.
+ *
+ * Moving between tabs, or opening one in a new browser tab, used to fetch
+ * everything again behind a skeleton - though nothing had usually changed.
+ * Now the last answer is drawn at once (from memory, or from localStorage
+ * after a reload) and the server is asked again behind it; only if the
+ * answer differs is the tab drawn again. The server answers an unchanged
+ * list with an empty 304, so the check is cheap as well as invisible.
+ *
+ * Never trusted on its own: every saved answer is re-asked whenever it is
+ * shown, and any change made here (anything but a GET) forgets them all.
+ */
+const CACHE_STORE = "doorman:answers:v1";
+const cache = new Map();
+/** Bumped by forgetCache, so a check already in flight cannot save a stale answer. */
+let cacheGeneration = 0;
+const checking = new Set();
+/** Long enough that drawing a tab from a fresh answer does not ask again at once. */
+const RECHECK_AFTER_MS = 2000;
+
+try {
+  for (const [path, entry] of JSON.parse(localStorage.getItem(CACHE_STORE) ?? "[]")) cache.set(path, { ...entry, at: 0 });
+} catch {
+  // Private window, blocked storage, or an old format: start empty.
+}
+
+function saveCache() {
+  try {
+    localStorage.setItem(CACHE_STORE, JSON.stringify([...cache]));
+  } catch {
+    // Full or blocked. The in-memory copy still serves this page.
+  }
+}
+
+function forgetCache() {
+  cacheGeneration++;
+  cache.clear();
+  try {
+    localStorage.removeItem(CACHE_STORE);
+  } catch {
+    // Nothing to do.
+  }
+}
+
+function remember(path, data) {
+  const text = JSON.stringify(data);
+  const changed = cache.get(path)?.text !== text;
+  cache.set(path, { text, at: Date.now() });
+  if (changed) saveCache();
+  return changed;
+}
+
+/**
+ * GET `path` for drawing `tab`: the saved answer if there is one, checked
+ * behind the scenes, or a real request if there is not. A copy every time,
+ * so a renderer changing what it was given cannot change the cache.
+ */
+async function load(path, tab) {
+  const hit = cache.get(path);
+  if (!hit) {
+    const generation = cacheGeneration;
+    const data = await api(path);
+    if (generation === cacheGeneration) remember(path, data);
+    return data;
+  }
+  if (Date.now() - hit.at > RECHECK_AFTER_MS) recheck(path, tab);
+  return JSON.parse(hit.text);
+}
+
+function recheck(path, tab) {
+  if (checking.has(path)) return;
+  checking.add(path);
+  const generation = cacheGeneration;
+  api(path)
+    .then((data) => {
+      if (generation !== cacheGeneration) return;
+      // Drawn again only when something actually changed, and only if that
+      // tab is still the one on screen; any other picks it up next time.
+      if (remember(path, data) && currentTab === tab) RENDERERS[tab]?.();
+    })
+    .catch(() => {
+      // The saved answer is already on screen; a failed check changes nothing.
+    })
+    .finally(() => checking.delete(path));
 }
 
 /**
@@ -223,8 +315,11 @@ const tabAt = (pathname) => TABS.find((t) => PAGES[t].path === pathname) ?? "now
  * false, because the browser has already moved and a push would wipe out
  * the entries ahead.
  */
+let currentTab = "now";
+
 function show(tab, { push = true } = {}) {
   if (!TABS.includes(tab)) return;
+  currentTab = tab;
   for (const name of TABS) $(`#tab-${name}`).hidden = name !== tab;
   for (const link of $$("nav [data-tab]")) {
     if (link.dataset.tab === tab) link.setAttribute("aria-current", "page");
@@ -285,7 +380,7 @@ async function renderNow() {
     <div class="sk" style="aspect-ratio:1;border-radius:var(--radius)"></div>
     <div>${skLines(5)}</div></div>`;
 
-  state = await api("/api/state");
+  state = await load("/api/state", "now");
   if (!fresh()) return;
 
   $("#version").textContent = `v${state.version}`;
@@ -437,11 +532,11 @@ async function renderSettings() {
   const fresh = ticket("settings");
   $("#devices-list").innerHTML = skeletonRows(2);
 
-  const [list, settings] = await Promise.all([api("/api/devices"), api("/api/settings")]);
-  await loadSounds();
+  const [list, settings] = await Promise.all([load("/api/devices", "settings"), load("/api/settings", "settings")]);
+  await loadSounds("settings");
   if (!fresh()) return;
   devices = list;
-  const themeList = await api("/api/themes");
+  const themeList = await load("/api/themes", "settings");
 
   $("#devices-list").innerHTML =
     devices.length === 0
@@ -637,11 +732,11 @@ async function renderThemes() {
   $("#themes-list").innerHTML = skeletonRows(4);
 
   [themes, media, devices] = await Promise.all([
-    api("/api/themes"),
-    api("/api/media"),
-    api("/api/devices"),
+    load("/api/themes", "themes"),
+    load("/api/media", "themes"),
+    load("/api/devices", "themes"),
   ]);
-  await loadSounds();
+  await loadSounds("themes");
   if (!fresh()) return;
 
   if (themes.length === 0) {
@@ -883,7 +978,7 @@ async function renderMedia() {
   // count them. Tiles the right shape keep the layout from jumping.
   $("#media-grid").innerHTML = skeletonTiles(10);
 
-  media = await api("/api/media");
+  media = await load("/api/media", "media");
   if (!fresh()) return;
   if (media.length === 0) {
     $("#media-grid").innerHTML = emptyState("No images yet", "Upload a GIF to get started.");
@@ -996,9 +1091,9 @@ function soundOptions(selected) {
   );
 }
 
-async function loadSounds() {
+async function loadSounds(tab = "sounds") {
   try {
-    sounds = await api("/api/ringtones");
+    sounds = await load("/api/ringtones", tab);
   } catch {
     // 503 when no admin credentials are configured. Images still work, which
     // is the whole reason the sound half is optional.
@@ -1048,7 +1143,7 @@ async function renderSounds() {
   // worth surfacing where the sounds are rather than only on each theme.
   let broken = [];
   try {
-    broken = await api("/api/sounds/broken");
+    broken = await load("/api/sounds/broken", "sounds");
   } catch {
     // No admin credentials; the list above already explains that.
   }
@@ -2255,7 +2350,7 @@ async function renderCalendar() {
 
   // Each doorbell has its own rotation, so the calendar has to be about
   // one of them. The picker only appears when there is a choice to make.
-  if (devices.length === 0) devices = await api("/api/devices");
+  if (devices.length === 0) devices = await load("/api/devices", "calendar");
   const field = $("#cal-device-field");
   field.hidden = devices.length < 2;
   if ($("#cal-device").options.length !== devices.length) {
@@ -2271,8 +2366,9 @@ async function renderCalendar() {
   $("#calendar").innerHTML = skeletonDays(Math.min(Number(days), 63));
 
   const picked = $("#cal-device").value;
-  const response = await api(
+  const response = await load(
     `/api/calendar?days=${days}${from ? `&from=${from}` : ""}${picked ? `&device=${encodeURIComponent(picked)}` : ""}`,
+    "calendar",
   );
   if (!fresh()) return;
   const data = response.days;
@@ -2351,7 +2447,7 @@ async function renderHistory() {
   const fresh = ticket("history");
   $("#history").innerHTML = `<tbody>${skeletonRows(5)}</tbody>`;
 
-  const rows = await api("/api/applies?limit=100");
+  const rows = await load("/api/applies?limit=100", "history");
   if (!fresh()) return;
   if (rows.length === 0) {
     $("#history").innerHTML = `<tbody><tr><td>${esc("Nothing has run yet.")}</td></tr></tbody>`;

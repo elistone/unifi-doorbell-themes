@@ -1,8 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
+import { FileHashes } from "../media/hashes.ts";
 import { extname, join } from "node:path";
 import type { AssetSource, ImageDevice, SoundDevice } from "../apply.ts";
 import type { PrivateApi } from "./private.ts";
-import { hashBytes } from "../apply.ts";
 import type { Protect } from "./protect.ts";
 
 /**
@@ -54,15 +54,20 @@ export class DirectoryAssetSource implements AssetSource {
   readonly #directory: string;
   readonly #protect: Protect;
   #index: Map<string, string> | null = null;
+  readonly #hashes = new FileHashes();
 
   constructor(directory: string, protect: Protect) {
     this.#directory = directory;
     this.#protect = protect;
   }
 
-  /** Hash every supported file in the media directory. */
+  /**
+   * Hash every supported file in the media directory - reading only the ones
+   * that are new or have changed since last time; see FileHashes.
+   */
   async index(): Promise<Map<string, string>> {
     const index = new Map<string, string>();
+    const seen: string[] = [];
     const entries = await readdir(this.#directory, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile()) continue;
@@ -71,9 +76,11 @@ export class DirectoryAssetSource implements AssetSource {
       // alone lets them through and they upload as corrupt assets.
       if (entry.name.startsWith(".")) continue;
       if (!(extname(entry.name).toLowerCase() in MIME_BY_EXTENSION)) continue;
-      const bytes = await readFile(join(this.#directory, entry.name));
-      index.set(hashBytes(bytes), entry.name);
+      const path = join(this.#directory, entry.name);
+      seen.push(path);
+      index.set((await this.#hashes.of(path)).hash, entry.name);
     }
+    this.#hashes.keepOnly(seen);
     this.#index = index;
     return index;
   }
