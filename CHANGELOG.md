@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.12.0 - 2026-11-15
+
 ### Added
 
 - **Every tab has its own address** - `/themes`, `/images`, `/sounds`,
