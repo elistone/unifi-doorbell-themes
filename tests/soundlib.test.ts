@@ -55,3 +55,19 @@ describe("sound library", () => {
     assert.equal(await library.find(sound.hash), null);
   });
 });
+
+describe("renaming", () => {
+  it("changes the name and keeps the hash every theme points at", async () => {
+    const { sound } = await library.add(mp3("x"), "old name");
+    const renamed = await library.rename(sound.hash, "New: name");
+    assert.equal(renamed.name, "New name");
+    assert.equal(renamed.hash, sound.hash);
+    assert.deepEqual((await library.list()).map((s) => s.name), ["New name"]);
+  });
+
+  it("refuses a name another sound has", async () => {
+    await library.add(mp3("a"), "taken");
+    const { sound } = await library.add(mp3("b"), "mine");
+    await assert.rejects(() => library.rename(sound.hash, "Taken"), /already a sound called "taken"/);
+  });
+});

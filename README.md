@@ -431,7 +431,7 @@ strips the TypeScript itself, and does so without a flag only from 23.6. The
 container ships 24.
 
 ```bash
-npm test              # 237 tests
+npm test              # 243 tests
 npm run check         # tests + the import check below
 ```
 

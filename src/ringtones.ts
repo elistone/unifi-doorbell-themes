@@ -154,12 +154,77 @@ export class RingtoneCache {
     return adopted;
   }
 
+  /**
+   * Re-point themes whose ringtone id no longer exists at a library sound
+   * of the name they remember. Returns the theme names re-pointed.
+   *
+   * The library's version of relinkSounds: after a Protect migration the
+   * old ids are gone for good, and a sound with the remembered name in the
+   * library is a better answer than waiting for one to appear on the
+   * controller - it can be uploaded whenever it is needed.
+   */
+  async relinkBroken(live: Ringtone[]): Promise<string[]> {
+    const ids = new Set(live.map((r) => r.id));
+    const broken = this.#store
+      .themes()
+      .filter((t) => t.sound && !isLibraryRef(t.sound) && !ids.has(t.sound) && t.soundName);
+    if (broken.length === 0) return [];
+
+    const byName = new Map((await this.#files.list()).map((s) => [nameKey(s.name), s]));
+    const relinked: string[] = [];
+    for (const theme of broken) {
+      const sound = byName.get(nameKey(theme.soundName!));
+      if (!sound) continue;
+      this.#store.upsertTheme({ ...theme, sound: libraryRef(sound.hash), soundName: sound.name });
+      this.#log(`theme "${theme.name}" re-linked from missing ringtone ${theme.sound} to library sound "${sound.name}"`);
+      relinked.push(theme.name);
+    }
+    return relinked;
+  }
+
+  /**
+   * Swap a sound that exists only on the controller for a library sound
+   * found to replace it - typically the same clip found again, since
+   * Protect cannot hand the original back.
+   *
+   * Unlike adopting, this does not trust that the two are the same audio:
+   * themes and the default move to the library sound, and the old copy is
+   * deleted so the new one is what gets uploaded. Unless a doorbell is
+   * playing it right now - then it is linked instead, and stays until the
+   * cache next needs the room. Removing it would leave that doorbell
+   * pointing at nothing.
+   */
+  async replace(ringtoneId: string, hash: string): Promise<"removed" | "linked"> {
+    const ref = libraryRef(hash);
+    const sound = (await this.#files.list()).find((s) => s.hash === hash);
+    for (const theme of this.#store.themes()) {
+      if (theme.sound === ringtoneId) this.#store.upsertTheme({ ...theme, sound: ref, soundName: sound?.name ?? theme.soundName });
+    }
+    if (this.#store.setting("defaultRingtone") === ringtoneId) this.#store.setSetting("defaultRingtone", ref);
+
+    // Asked after the move, so themes no longer pin it by id - only what is
+    // playing, or a deployment's own default, still can.
+    const live = await this.#host.ringtones();
+    const tone = live.find((r) => r.id === ringtoneId);
+    if (!tone) return "removed";
+    const at = this.#now().toISOString();
+    if ((await this.#keep()).has(ringtoneId)) {
+      this.#store.recordRingtone({ hash, ringtoneId, name: tone.name, uploadedAt: at, lastUsed: at });
+      this.#log(`linked "${tone.name}" (${ringtoneId}) to its replacement - playing, so kept for now`);
+      return "linked";
+    }
+    await this.#host.deleteRingtone(ringtoneId);
+    this.#log(`removed "${tone.name}" (${ringtoneId}) - replaced by library sound "${sound?.name ?? hash.slice(0, 12)}"`);
+    return "removed";
+  }
+
   /** The ringtone id for a library sound, uploading it - and making room - if needed. */
   async ensure(hash: string): Promise<Ensured> {
     const at = this.#now().toISOString();
     let live = await this.#host.ringtones();
     this.reconcile(live);
     await this.adopt(live);
+    await this.relinkBroken(live);
 
     const known = this.#store.ringtoneFor(hash);
     if (known) {

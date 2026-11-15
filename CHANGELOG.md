@@ -5,6 +5,21 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **Rename library sounds** in place on the Sounds tab. Themes point at a
+  sound's content, so nothing breaks, and the name they show follows. A
+  copy already on the doorbell keeps its old name there until it is next
+  uploaded - Protect has no rename.
+- **Replace…** on a sound that has no copy in the library opens Find a
+  sound searching for it by name. Saving the replacement moves its themes
+  and the default onto the library sound and deletes the old copy from the
+  doorbell - or links it, if a doorbell is playing it at that moment.
+  Unlike adopting, this does not assume the two are the same audio.
+- **Themes pointing at a ringtone the console no longer has** - after a
+  Protect migration - are re-linked to a library sound with the name they
+  remember, as soon as one is there.
+
 ## 0.10.0 - 2026-11-15
 
 ### Added

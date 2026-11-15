@@ -998,6 +998,7 @@ async function renderSounds() {
         <td class="mono">${esc(r.id)}</td>
         <td>${r.inUse ? `<span class="badge ok">in use</span>` : ""}</td>
         <td style="text-align:right">
+          ${r.noCopy ? `<button class="btn small" data-replace-sound="${esc(r.id)}" data-name="${esc(r.name)}" title="Find this sound again and keep it in the library">${icon("add")}Replace…</button>` : ""}
           ${r.isDefault ? "" : `<button class="btn small danger" data-del-sound="${esc(r.id)}" data-name="${esc(r.name)}" data-managed="${r.managed ? "1" : ""}">${icon("trash")}Delete</button>`}
         </td>
       </tr>`,
@@ -1023,7 +1024,7 @@ async function renderSounds() {
     .map(
       (l) => `
       <tr>
-        <td><strong>${esc(l.name)}</strong></td>
+        <td class="lib-name"><strong>${esc(l.name)}</strong></td>
         <td>${
           l.onDoorbell
             ? `<span class="badge ok">on the doorbell</span>`
@@ -1033,6 +1034,7 @@ async function renderSounds() {
         <td style="text-align:right; white-space:nowrap">
           <button class="btn small" data-listen-lib="${esc(l.hash)}" aria-label="Listen to ${esc(l.name)}">${icon("play")}</button>
           ${l.onDoorbell ? "" : `<button class="btn small" data-upload-lib="${esc(l.hash)}" title="Put it on the doorbell now, making room if needed">${icon("upload")}Put on doorbell</button>`}
+          <button class="btn small" data-rename-lib="${esc(l.hash)}" data-name="${esc(l.name)}">${icon("edit")}Rename</button>
           <button class="btn small danger" data-del-lib="${esc(l.hash)}" data-name="${esc(l.name)}" ${l.inUse ? "disabled title='Used by a theme or the default'" : ""}>${icon("trash")}Delete</button>
         </td>
       </tr>`,
@@ -1125,6 +1127,46 @@ async function renderSounds() {
     ),
   );
 
+  // Rename in place: the name cell becomes a field. Enter saves, Escape
+  // puts it back.
+  $$("[data-rename-lib]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const cell = b.closest("tr").querySelector(".lib-name");
+      cell.innerHTML = `<form class="search-row">
+          <input type="text" maxlength="60" value="${esc(b.dataset.name)}" aria-label="New name">
+          <button type="submit" class="btn small primary">Save</button>
+        </form>`;
+      const form = cell.querySelector("form");
+      const input = form.querySelector("input");
+      input.focus();
+      input.select();
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          renderSounds();
+        }
+      });
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const name = input.value.trim();
+        if (!name || name === b.dataset.name) return renderSounds();
+        withBusy(submitter(form), async () => {
+          const renamed = await api("/api/sounds/library", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hash: b.dataset.renameLib, name }),
+          });
+          toast(`Renamed to ${renamed.name}.`, "ok");
+          await renderSounds();
+        });
+      });
+    }),
+  );
+
+  $$("[data-replace-sound]").forEach((b) =>
+    b.addEventListener("click", () => openFindSound({ id: b.dataset.replaceSound, name: b.dataset.name })),
+  );
+
   $$("[data-del-lib]").forEach((b) =>
     b.addEventListener("click", async () => {
       if (!confirm(`Delete "${b.dataset.name}" from the library? It is removed from the doorbell too.`)) return;
@@ -1180,6 +1222,7 @@ async function renderSounds() {
 $("#upload-sound").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
+  sound.replaces = null;
   const form = new FormData();
   form.append("file", file);
   try {
@@ -1460,7 +1503,7 @@ $("#gif-keep").addEventListener("click", (e) =>
 
 // --------------------------------------------------------------- sounds
 
-const sound = { query: "", next: null, staged: null, rendered: null };
+const sound = { query: "", next: null, staged: null, rendered: null, replaces: null };
 
 /** One player for every Listen button, so two never talk over each other. */
 const listener = new Audio();
@@ -1478,20 +1521,36 @@ function soundView(view) {
   $("#sound-edit").hidden = view !== "edit";
   $("#sound-back").hidden = view !== "edit";
   $("#sound-keep").hidden = view !== "edit";
-  $("#sound-dialog-title").textContent = view === "edit" ? "Trim the sound" : "Find a sound";
+  $("#sound-dialog-title").textContent =
+    view === "edit" ? "Trim the sound" : sound.replaces ? `Replace "${sound.replaces.name}"` : "Find a sound";
 }
 
-$("#find-sound").addEventListener("click", () => {
+/**
+ * Open Find a sound. With `replaces`, it is finding again a sound that is
+ * only on the doorbell: the search starts with its name, the result is
+ * saved under that name, and saving moves its themes across and retires
+ * the old copy.
+ */
+function openFindSound(replaces = null) {
+  sound.replaces = replaces;
   const searchable = state?.importing?.soundSearch !== false;
   $("#sound-search-form").hidden = !searchable;
   $("#sound-search-off").hidden = searchable;
   $("#sound-video-hint").textContent = state?.importing?.videoLinks
     ? "YouTube and other video links work too - the audio is pulled out for you to trim."
     : "";
+  $("#sound-dialog-title").textContent = replaces ? `Replace "${replaces.name}"` : "Find a sound";
   soundView("find");
   $("#sound-dialog").showModal();
+  if (replaces && searchable) {
+    $("#sound-q").value = replaces.name;
+    sound.query = replaces.name;
+    withBusy(submitter($("#sound-search-form")), () => searchSounds(false));
+  }
   (searchable ? $("#sound-q") : $("#sound-link")).focus();
-});
+}
+
+$("#find-sound").addEventListener("click", () => openFindSound());
 
 $("#sound-close").addEventListener("click", () => $("#sound-dialog").close());
 $("#sound-back").addEventListener("click", () => {
@@ -1595,7 +1654,9 @@ function showStagedSound(staged, suggestedName) {
   $("#sound-end").value = staged.durationSeconds.toFixed(2);
   $("#sound-fade-in").value = 0;
   $("#sound-fade-out").value = 0;
-  $("#sound-name").value = String(suggestedName ?? "")
+  // A replacement keeps the name of what it replaces, so the doorbell and
+  // every theme carry on calling it the same thing.
+  $("#sound-name").value = String(sound.replaces?.name ?? suggestedName ?? "")
     .replace(/\.[a-z0-9]{2,4}$/i, "")
     .trim()
     .slice(0, 60);
@@ -1865,10 +1926,13 @@ $("#sound-keep").addEventListener("click", (e) =>
       id: rendered.id,
       name,
       upload: $("#sound-upload-now").checked,
+      replaces: sound.replaces?.id,
     });
     const evicted = result.onDoorbell?.evicted ?? [];
     toast(
       (result.duplicate ? `Already in the library as ${result.name}.` : `Added ${result.name} to the library.`) +
+        (result.replaced === "removed" ? " The old copy is gone from the doorbell, and its themes use this one now." : "") +
+        (result.replaced === "linked" ? " Its themes use this one now; the old copy stays on the doorbell while it is playing." : "") +
         (result.adopted?.length ? ` Linked to "${result.adopted.join('", "')}" already on the doorbell - Doorman manages it now.` : "") +
         (result.onDoorbell ? " It is on the doorbell now." : "") +
         (evicted.length > 0 ? ` Removed ${evicted.join(", ")} to make room - still in the library.` : ""),

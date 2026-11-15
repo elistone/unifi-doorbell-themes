@@ -15,7 +15,7 @@
  * MP3 only, because everything arrives through the editor, which writes
  * MP3 - so the bytes uploaded are what the upload claims they are.
  */
-import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hashBytes } from "../apply.ts";
 
@@ -102,6 +102,23 @@ export class SoundLibrary {
       sound: { hash, name: filename.slice(0, -4), filename, bytes: bytes.byteLength },
       duplicate: false,
     };
+  }
+
+  /**
+   * Give a sound a new name. The content - and so the hash every theme
+   * points at - is untouched, which is what makes renaming safe.
+   */
+  async rename(hash: string, name: string): Promise<LibrarySound> {
+    const filename = soundFilename(name);
+    const existing = await this.list();
+    const sound = existing.find((s) => s.hash === hash);
+    if (!sound) throw new Error("That sound is not in the library.");
+    if (sound.filename === filename) return sound;
+    // Case-only renames are the sound itself on a case-insensitive disk.
+    const clash = existing.find((s) => s.hash !== hash && s.filename.toLowerCase() === filename.toLowerCase());
+    if (clash) throw new Error(`There is already a sound called "${clash.name}". Choose another name.`);
+    await rename(join(this.dir, sound.filename), join(this.dir, filename));
+    return { ...sound, name: filename.slice(0, -4), filename };
   }
 
   async remove(hash: string): Promise<LibrarySound | null> {

@@ -329,3 +329,56 @@ describe("removing safely", () => {
     assert.match(lines.join("\n"), /removed "sound a" .* to make room for "sound c"/);
   });
 });
+
+describe("replacing a sound that has no copy", () => {
+  it("moves themes and the default to the replacement, and deletes the old copy", async () => {
+    const old = controller.add("Haunted Mansion");
+    store.upsertTheme({
+      id: "halloween", name: "Halloween", image: "h", sound: old.id, soundName: "Haunted Mansion",
+      priority: 0, enabled: true, rules: [{}], devices: [],
+    });
+    store.setSetting("defaultRingtone", old.id);
+    named.set("mansion", "Haunted Mansion (found again)");
+
+    const outcome = await cache().replace(old.id, "mansion");
+    assert.equal(outcome, "removed");
+    assert.deepEqual(controller.deleted, [old.id]);
+    assert.equal(store.themes()[0]!.sound, "library:mansion");
+    assert.equal(store.themes()[0]!.soundName, "Haunted Mansion (found again)");
+    assert.equal(store.setting("defaultRingtone"), "library:mansion");
+  });
+
+  it("links rather than deletes the one a doorbell is playing", async () => {
+    const old = controller.add("Haunted Mansion");
+    keep = new Set([old.id]);
+    named.set("mansion", "Haunted Mansion");
+    assert.equal(await cache().replace(old.id, "mansion"), "linked");
+    assert.deepEqual(controller.deleted, []);
+    assert.equal(store.ringtoneFor("mansion")?.ringtoneId, old.id);
+  });
+});
+
+describe("themes pointing at a ringtone the console no longer has", () => {
+  it("are re-linked to a library sound of the name they remember", async () => {
+    store.upsertTheme({
+      id: "stitch_hi", name: "Stitch", image: "h", sound: "69c6b92602b95703e419be84", soundName: "stitch_music",
+      priority: 0, enabled: true, rules: [{}], devices: [],
+    });
+    named.set("stitch", "Stitch_Music");
+
+    const relinked = await cache().relinkBroken(await controller.ringtones());
+    assert.deepEqual(relinked, ["Stitch"]);
+    assert.equal(store.themes()[0]!.sound, "library:stitch");
+  });
+
+  it("leave a theme alone while its ringtone still exists", async () => {
+    const live = controller.add("stitch_music");
+    store.upsertTheme({
+      id: "stitch_hi", name: "Stitch", image: "h", sound: live.id, soundName: "stitch_music",
+      priority: 0, enabled: true, rules: [{}], devices: [],
+    });
+    named.set("stitch", "something else");
+    assert.deepEqual(await cache().relinkBroken(await controller.ringtones()), []);
+    assert.equal(store.themes()[0]!.sound, live.id);
+  });
+});

@@ -802,17 +802,23 @@ export function createApi(deps: ApiDeps) {
      */
     "POST /api/sounds/library": async (req) => {
       const library = requireLibrary();
-      const body = await readJson<{ id?: string; name?: string; upload?: boolean }>(req);
+      const body = await readJson<{ id?: string; name?: string; upload?: boolean; replaces?: string }>(req);
       const input = stagedPath(body.id);
       await assertStaged(input);
 
       const bytes = new Uint8Array(await readFile(input));
       const { sound, duplicate } = await asBadRequest(() => library.add(bytes, body.name ?? ""));
 
-      // The same name as a sound added through Protect: link the two now, so
-      // the slot it holds becomes one Doorman can manage.
+      // Found again to replace a sound only on the controller: move what used
+      // it across and retire the old copy. Otherwise, the same name as a sound
+      // added through Protect means it IS that sound - link the two, so the
+      // slot it holds becomes one Doorman can manage.
       let adopted: string[] = [];
-      if (deps.ringtones && priv) {
+      let replaced: "removed" | "linked" | null = null;
+      if (body.replaces) {
+        if (!deps.ringtones) throw new HttpError(503, "Ring sounds need admin credentials.");
+        replaced = await asBadRequest(() => deps.ringtones!.replace(body.replaces!, sound.hash));
+      } else if (deps.ringtones && priv) {
         adopted = await deps.ringtones.adopt(await priv.ringtones()).catch(() => []);
       }
 
@@ -821,7 +827,24 @@ export function createApi(deps: ApiDeps) {
         if (!deps.ringtones) throw new HttpError(503, "Ring sounds need admin credentials.");
         onDoorbell = await asBadRequest(() => deps.ringtones!.ensure(sound.hash));
       }
-      return { ...sound, ref: libraryRef(sound.hash), duplicate, adopted, onDoorbell };
+      return { ...sound, ref: libraryRef(sound.hash), duplicate, adopted, replaced, onDoorbell };
+    },
+
+    /**
+     * Rename a library sound. Themes point at its content, so nothing breaks;
+     * the name they display is updated to match. A copy already on the
+     * controller keeps its old name there until it is next uploaded - Protect
+     * has no rename, and a name is not worth a delete and re-upload.
+     */
+    "PUT /api/sounds/library": async (req) => {
+      const library = requireLibrary();
+      const body = await readJson<{ hash?: string; name?: string }>(req);
+      const renamed = await asBadRequest(() => library.rename(body.hash ?? "", body.name ?? ""));
+      const ref = libraryRef(renamed.hash);
+      for (const theme of store.themes()) {
+        if (theme.sound === ref) store.upsertTheme({ ...theme, soundName: renamed.name });
+      }
+      return { ...renamed, ref };
     },
 
     /** Put a library sound on the controller now, making room if it must. */
@@ -899,6 +922,7 @@ export function createApi(deps: ApiDeps) {
       // original is in the library; noticing it here means the Sounds tab
       // is right as soon as it is opened.
       await deps.ringtones?.adopt(tones);
+      await deps.ringtones?.relinkBroken(tones);
 
       const refs = new Set(store.themes().map((t) => t.sound).filter(Boolean));
       const fallback = deps.defaultSound?.();
