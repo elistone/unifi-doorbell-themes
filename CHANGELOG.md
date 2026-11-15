@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.13.0 - 2026-11-15
+
 ### Changed
 
 - **Tabs appear at once instead of loading every time.** Each tab's last
