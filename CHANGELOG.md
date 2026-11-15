@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.11.0 - 2026-11-15
+
 ### Added
 
 - **Rename library sounds** in place on the Sounds tab. Themes point at a
