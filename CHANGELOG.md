@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.11.1 - 2026-11-15
+
 ### Fixed
 
 - **Apply now puts a library sound on the doorbell.** The button skipped the
