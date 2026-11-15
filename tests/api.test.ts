@@ -381,3 +381,39 @@ describe("deleting a ring sound on the Sounds tab", () => {
     assert.deepEqual(deleted, ["tone-1"]);
   });
 });
+
+describe("Apply now", () => {
+  it("puts a library sound on the doorbell, as the 04:00 roll does", async () => {
+    // The button once called apply() without the ring sound cache, so a
+    // library sound was skipped without a word: the image changed, the
+    // doorbell kept a ringtone that no longer existed.
+    store.upsertTheme({
+      id: "doubtfire",
+      name: "doubtfire",
+      image: "hash-xmas",
+      priority: 0,
+      enabled: true,
+      rules: [{}],
+      sound: "library:abc",
+    });
+    const set: string[] = [];
+    const local = createApi({
+      store,
+      source,
+      imageDeviceFor: () => new FakeDevice(),
+      soundDeviceFor: () => ({ currentRingtone: async () => "gone", setRingtone: async (id: string) => void set.push(id) }),
+      ringtones: { ensure: async () => ({ ringtoneId: "tone-up", uploaded: true, evicted: [] }) },
+      protect: { displayCapableCameras: async () => [] } as never,
+      mediaDir: "media",
+      cacheDir: "/tmp/doorman-test-thumbs",
+      protectVersion: "7.2.105",
+    } as never);
+
+    const { results } = (await local.routes["POST /api/apply"](undefined as never, url("/api/apply?device=front"))) as {
+      results: Array<{ sound: string; reason: string }>;
+    };
+    assert.deepEqual(set, ["tone-up"]);
+    assert.equal(results[0]!.sound, "applied");
+    assert.match(results[0]!.reason, /ring sound uploaded/);
+  });
+});

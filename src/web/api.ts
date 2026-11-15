@@ -1090,6 +1090,7 @@ export function createApi(deps: ApiDeps) {
             {
               dryRun,
               defaultSound: deps.defaultSound?.(),
+              ringtones: deps.ringtones,
               deviceId: target.id,
               deviceName: target.name,
             },

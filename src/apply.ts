@@ -180,7 +180,9 @@ async function trySound(
     let ringtoneId = wanted;
     let note: string | undefined;
     if (isLibraryRef(wanted)) {
-      if (!ringtones) return { outcome: "skipped" };
+      // Said out loud, because skipping it in silence is how Apply now once
+      // left a doorbell pointing at a deleted ringtone with nothing to say why.
+      if (!ringtones) return { outcome: "skipped", note: "the ring sound needs admin credentials to upload" };
       const ensured = await ringtones.ensure(libraryHash(wanted));
       ringtoneId = ensured.ringtoneId;
       if (ensured.uploaded) {

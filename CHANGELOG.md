@@ -5,6 +5,14 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Fixed
+
+- **Apply now puts a library sound on the doorbell.** The button skipped the
+  ring sound cache that the 04:00 roll uses, so a theme whose sound is in the
+  library changed its picture but left the ringtone alone, still pointing
+  at one that no longer existed, and gave no reason. A sound that is skipped
+  now always says why.
+
 ## 0.11.0 - 2026-11-15
 
 ### Added
