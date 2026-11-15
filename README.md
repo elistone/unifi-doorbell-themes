@@ -118,7 +118,8 @@ any library tile opens the same editor and writes a new copy.
 **Find a sound** on the Sounds tab searches [Freesound](https://freesound.org),
 which is Creative Commons audio — each result shows its licence, and a
 CC BY sound asks you to credit its author. Or paste a link to an audio
-file. Trim it (play it, pause where it should start, press **Here**),
+file. Trim it on the waveform — drag the handles, click anywhere to hear
+it from there, add a fade in or out if it starts or stops abruptly —
 preview, and it is kept in the **sound library** as a real MP3 with its
 volume evened out to match the others. **Upload sound** goes through the
 same editor.
@@ -430,7 +431,7 @@ strips the TypeScript itself, and does so without a flag only from 23.6. The
 container ships 24.
 
 ```bash
-npm test              # 216 tests
+npm test              # 223 tests
 npm run check         # tests + the import check below
 ```
 

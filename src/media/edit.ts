@@ -157,7 +157,13 @@ export interface AudioEdit {
    * doorbell has one volume setting for all of them.
    */
   normalise?: boolean;
+  /** Seconds of fade at each end. Zero still gets the click-stopping edge. */
+  fadeIn?: number;
+  fadeOut?: number;
 }
+
+/** Longer than this is a slow swell, not a doorbell. */
+export const MAX_FADE_SECONDS = 5;
 
 /** Short enough to stop the cut clicking, too short to hear as a fade. */
 const EDGE_FADE_SECONDS = 0.03;
@@ -166,13 +172,22 @@ export function audioEditArgs(input: string, output: string, edit: AudioEdit, du
   const { start, end } = clampWindow(edit.start, edit.end, duration);
   const length = end - start;
 
+  // Never shorter than the edge fade, which stops the cut clicking; never
+  // longer than the cap or the clip. Each is bounded by the clip on its own,
+  // so a fade in and out longer than the clip together still both happen -
+  // overlapping, which is what someone asking for both on a short clip wants.
+  const fade = (requested: number | undefined) =>
+    Math.min(Math.max(EDGE_FADE_SECONDS, Number(requested) || 0), MAX_FADE_SECONDS, length);
+  const fadeIn = fade(edit.fadeIn);
+  const fadeOut = fade(edit.fadeOut);
+
   const filters = [
     `atrim=start=${start.toFixed(3)}:end=${end.toFixed(3)}`,
     "asetpts=PTS-STARTPTS",
     // EBU R128 at -16 LUFS, the usual target for speech and alerts.
     ...(edit.normalise === false ? [] : ["loudnorm=I=-16:TP=-1.5:LRA=11"]),
-    `afade=t=in:st=0:d=${EDGE_FADE_SECONDS}`,
-    `afade=t=out:st=${Math.max(0, length - EDGE_FADE_SECONDS).toFixed(3)}:d=${EDGE_FADE_SECONDS}`,
+    `afade=t=in:st=0:d=${fadeIn.toFixed(3)}`,
+    `afade=t=out:st=${Math.max(0, length - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
   ];
 
   return [
@@ -189,6 +204,58 @@ export function audioEditArgs(input: string, output: string, edit: AudioEdit, du
     "-f", "mp3",
     output,
   ];
+}
+
+// --------------------------------------------------------------- waveform
+
+/**
+ * Samples per second for drawing. A waveform a few hundred pixels wide needs
+ * nowhere near audio rates, and ten minutes at this rate is under 5MB of
+ * PCM - small enough to read in one go.
+ */
+const PEAK_RATE = 4000;
+
+/**
+ * The loudest and quietest sample in each of `buckets` slices, as a flat
+ * [min, max, min, max, ...] list in -1..1. What a waveform is drawn from.
+ */
+export function peaksOf(samples: Int16Array, buckets: number): number[] {
+  const out: number[] = [];
+  if (samples.length === 0) return out;
+  const size = samples.length / buckets;
+  for (let b = 0; b < buckets; b++) {
+    const from = Math.floor(b * size);
+    const to = Math.max(from + 1, Math.floor((b + 1) * size));
+    let min = 0;
+    let max = 0;
+    for (let i = from; i < to && i < samples.length; i++) {
+      const v = samples[i]!;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    out.push(Math.round((min / 32768) * 1000) / 1000, Math.round((max / 32767) * 1000) / 1000);
+  }
+  return out;
+}
+
+/**
+ * Waveform data for any file ffmpeg can read.
+ *
+ * Done here rather than by decoding in the browser, because what comes out
+ * of YouTube is usually WebM/Opus, which not every browser can decode - and
+ * the editor is most needed for exactly those long clips.
+ */
+export async function audioPeaks(path: string, buckets = 800): Promise<{ peaks: number[]; durationSeconds: number }> {
+  const { stdout } = await run(
+    FFMPEG,
+    ["-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", String(PEAK_RATE), "-f", "s16le", "-"],
+    { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 },
+  );
+  // Copied out, because the Buffer may not start on an even byte offset and
+  // an Int16Array view needs one.
+  const pcm = stdout as unknown as Buffer;
+  const samples = new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + (pcm.length & ~1)));
+  return { peaks: peaksOf(samples, buckets), durationSeconds: samples.length / PEAK_RATE };
 }
 
 export async function probeDuration(path: string): Promise<number> {

@@ -1477,14 +1477,14 @@ $("#find-sound").addEventListener("click", () => {
 
 $("#sound-close").addEventListener("click", () => $("#sound-dialog").close());
 $("#sound-back").addEventListener("click", () => {
-  $("#sound-source").pause();
+  stopWave();
   soundView("find");
 });
 
 // Nothing should keep playing behind a closed dialog.
 $("#sound-dialog").addEventListener("close", () => {
   stopListening();
-  $("#sound-source").pause();
+  stopWave();
   $("#sound-result-audio").pause();
 });
 
@@ -1551,21 +1551,240 @@ async function stageSound(request, suggestedName) {
   soundView("edit");
 }
 
+/**
+ * The waveform editor.
+ *
+ * The Start/End/Fade number fields are the one source of truth. Dragging a
+ * handle writes to them, typing in them moves the handles, and the render
+ * reads them - so the picture and the request sent can never disagree.
+ */
+const wave = { peaks: null, duration: 0, cursor: 0, stopAt: null, frame: 0 };
+
+const selection = () => ({ start: Number($("#sound-start").value) || 0, end: Number($("#sound-end").value) || 0 });
+const fades = () => ({
+  in: clamp(Number($("#sound-fade-in").value) || 0, 0, 5),
+  out: clamp(Number($("#sound-fade-out").value) || 0, 0, 5),
+});
+
 function showStagedSound(staged, suggestedName) {
   sound.staged = staged;
   sound.rendered = null;
 
   $("#sound-source").src = `/staging/${encodeURIComponent(staged.id)}`;
-  for (const id of ["#sound-start", "#sound-end"]) $(id).max = staged.durationSeconds.toFixed(1);
+  $("#sound-source").controls = false;
+  for (const id of ["#sound-start", "#sound-end"]) $(id).max = staged.durationSeconds.toFixed(2);
   $("#sound-start").value = 0;
-  $("#sound-end").value = staged.durationSeconds.toFixed(1);
+  $("#sound-end").value = staged.durationSeconds.toFixed(2);
+  $("#sound-fade-in").value = 0;
+  $("#sound-fade-out").value = 0;
   $("#sound-name").value = String(suggestedName ?? "")
     .replace(/\.[a-z0-9]{2,4}$/i, "")
     .trim()
     .slice(0, 60);
   $("#sound-result").hidden = true;
+
+  wave.peaks = null;
+  wave.duration = staged.durationSeconds;
+  wave.cursor = 0;
+  $("#wave").hidden = false;
+  $("#wave-msg").hidden = false;
   updateSoundLength();
+  drawWave();
+  loadPeaks(staged.id);
 }
+
+async function loadPeaks(id) {
+  try {
+    const { peaks } = await api(`/api/staging/peaks?id=${encodeURIComponent(id)}&buckets=1000`);
+    if (sound.staged?.id !== id) return; // another sound was opened meanwhile
+    wave.peaks = peaks;
+    $("#wave-msg").hidden = true;
+  } catch {
+    if (sound.staged?.id !== id) return;
+    // No picture, but still a way to listen, and the fields to trim with.
+    $("#wave").hidden = true;
+    $("#sound-source").controls = true;
+  }
+  drawWave();
+}
+
+/** How loud a moment in the clip ends up, 0..1, once the fades apply. */
+function envelope(t, start, end, f) {
+  let gain = 1;
+  if (f.in > 0 && t < start + f.in) gain = Math.min(gain, (t - start) / f.in);
+  if (f.out > 0 && t > end - f.out) gain = Math.min(gain, (end - t) / f.out);
+  return clamp(gain, 0, 1);
+}
+
+function drawWave() {
+  const box = $("#wave");
+  const canvas = $("#wave-canvas");
+  const { start, end } = selection();
+  $("#wave-cursor-label").textContent = secs(wave.cursor);
+  if (box.hidden || !wave.duration) return;
+
+  // Handles are positioned in percent, so they are right even before the
+  // canvas has a size to draw at.
+  for (const [id, t] of [["#wave-start", start], ["#wave-end", end]]) {
+    const handle = $(id);
+    handle.style.left = `${(clamp(t, 0, wave.duration) / wave.duration) * 100}%`;
+    handle.setAttribute("aria-valuemin", "0");
+    handle.setAttribute("aria-valuemax", wave.duration.toFixed(2));
+    handle.setAttribute("aria-valuenow", t.toFixed(2));
+    handle.setAttribute("aria-valuetext", secs(t));
+  }
+
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (!width || !height) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  // Read from the theme each time, so a light/dark switch is picked up.
+  const css = getComputedStyle(document.documentElement);
+  const accent = css.getPropertyValue("--accent").trim();
+  const faint = css.getPropertyValue("--text-faint").trim();
+  const text = css.getPropertyValue("--text").trim();
+  const mid = height / 2;
+  const f = fades();
+
+  if (wave.peaks) {
+    const buckets = wave.peaks.length / 2;
+    for (let x = 0; x < width; x++) {
+      const b = Math.min(buckets - 1, Math.floor((x / width) * buckets));
+      const lo = wave.peaks[b * 2];
+      const hi = wave.peaks[b * 2 + 1];
+      const t = (x / width) * wave.duration;
+      const inside = t >= start && t <= end;
+      const bar = (scale) => {
+        const top = mid - hi * mid * scale;
+        ctx.fillRect(x, top, 1, Math.max(1, mid - lo * mid * scale - top));
+      };
+
+      if (!inside) {
+        // Cut away: still visible, so you can see what you are leaving out.
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle = faint;
+        bar(1);
+        continue;
+      }
+      // Kept: the full wave faintly, and what survives the fades solidly,
+      // so a fade reads as the shape it will give the sound.
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = 0.25;
+      bar(1);
+      ctx.globalAlpha = 1;
+      bar(envelope(t, start, end, f));
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // The cursor: where Play from starts, and where Here takes its time.
+  ctx.fillStyle = text;
+  ctx.fillRect(Math.round((wave.cursor / wave.duration) * width), 0, 1.5, height);
+}
+
+new ResizeObserver(drawWave).observe($("#wave"));
+
+/** Seconds at a point across the waveform. */
+function timeAt(clientX) {
+  const rect = $("#wave").getBoundingClientRect();
+  return clamp((clientX - rect.left) / rect.width, 0, 1) * wave.duration;
+}
+
+/** Move one end of the selection, keeping them a tenth of a second apart. */
+function setEdge(which, t) {
+  const { start, end } = selection();
+  if (which === "start") $("#sound-start").value = clamp(t, 0, end - 0.1).toFixed(2);
+  else $("#sound-end").value = clamp(t, start + 0.1, wave.duration).toFixed(2);
+  updateSoundLength();
+  invalidateSound();
+  drawWave();
+}
+
+for (const [id, which] of [["#wave-start", "start"], ["#wave-end", "end"]]) {
+  const handle = $(id);
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    // Not a click on the waveform behind it, which would start playback.
+    event.stopPropagation();
+    handle.setPointerCapture(event.pointerId);
+    handle.dataset.dragging = "1";
+    handle.focus();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (handle.dataset.dragging) setEdge(which, timeAt(event.clientX));
+  });
+  for (const type of ["pointerup", "pointercancel"]) {
+    handle.addEventListener(type, () => delete handle.dataset.dragging);
+  }
+  // A tenth of a second per press, a whole second with Shift.
+  handle.addEventListener("keydown", (event) => {
+    const step = event.shiftKey ? 1 : 0.1;
+    const delta = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
+    if (!delta) return;
+    event.preventDefault();
+    setEdge(which, selection()[which] + delta);
+  });
+}
+
+/**
+ * Play from a moment, stopping at `stopAt` if given. Driven by animation
+ * frames rather than timeupdate, which fires only a few times a second -
+ * too coarse to stop on a cut or to move the cursor smoothly.
+ */
+function playFrom(t, stopAt) {
+  const audio = $("#sound-source");
+  stopListening();
+  wave.cursor = t;
+  wave.stopAt = stopAt;
+  audio.currentTime = t;
+  audio.play().catch((error) => toast(error.message, "bad"));
+  cancelAnimationFrame(wave.frame);
+  const step = () => {
+    if (audio.paused) return drawWave();
+    if (wave.stopAt !== null && audio.currentTime >= wave.stopAt) {
+      audio.pause();
+      wave.cursor = wave.stopAt;
+      return drawWave();
+    }
+    wave.cursor = audio.currentTime;
+    drawWave();
+    wave.frame = requestAnimationFrame(step);
+  };
+  wave.frame = requestAnimationFrame(step);
+}
+
+function stopWave() {
+  $("#sound-source").pause();
+  cancelAnimationFrame(wave.frame);
+  drawWave();
+}
+
+/** Up to the end of the selection when starting inside it; to the end otherwise. */
+const playFromHere = (t) => playFrom(t, t < selection().end ? selection().end : null);
+
+$("#wave").addEventListener("pointerdown", (event) => {
+  if (event.target.closest(".wave-handle")) return;
+  playFromHere(timeAt(event.clientX));
+});
+$("#wave-play-sel").addEventListener("click", () => playFrom(selection().start, selection().end));
+$("#wave-play-cursor").addEventListener("click", () => playFromHere(wave.cursor));
+$("#wave-stop").addEventListener("click", stopWave);
+
+// With no waveform, the native controls are how you listen; keep the
+// cursor following them so Here still means "where I paused".
+$("#sound-source").addEventListener("timeupdate", () => {
+  if (!$("#sound-source").controls) return;
+  wave.cursor = $("#sound-source").currentTime;
+  $("#wave-cursor-label").textContent = secs(wave.cursor);
+});
 
 function invalidateSound() {
   sound.rendered = null;
@@ -1582,22 +1801,18 @@ function updateSoundLength() {
         (length > 10 ? " That is long for a doorbell - most ring sounds are a few seconds." : "");
 }
 
-for (const id of ["#sound-start", "#sound-end"]) {
+for (const id of ["#sound-start", "#sound-end", "#sound-fade-in", "#sound-fade-out"]) {
   $(id).addEventListener("input", () => {
     updateSoundLength();
     invalidateSound();
+    drawWave();
   });
 }
 $("#sound-normalise").addEventListener("change", invalidateSound);
 
-// Listen, pause where it should start, press Here. Easier than reading
-// timestamps off a scrubber.
-for (const [button, field] of [["#sound-mark-start", "#sound-start"], ["#sound-mark-end", "#sound-end"]]) {
-  $(button).addEventListener("click", () => {
-    $(field).value = $("#sound-source").currentTime.toFixed(1);
-    updateSoundLength();
-    invalidateSound();
-  });
+// Click the waveform where it should start, press Here.
+for (const [button, which] of [["#sound-mark-start", "start"], ["#sound-mark-end", "end"]]) {
+  $(button).addEventListener("click", () => setEdge(which, wave.cursor));
 }
 
 async function renderSoundPreview() {
@@ -1606,6 +1821,8 @@ async function renderSoundPreview() {
     start: Number($("#sound-start").value),
     end: Number($("#sound-end").value),
     normalise: $("#sound-normalise").checked,
+    fadeIn: fades().in,
+    fadeOut: fades().out,
   });
   sound.rendered = result;
   $("#sound-result-audio").src = `/staging/${encodeURIComponent(result.id)}`;

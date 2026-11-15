@@ -5,6 +5,17 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **A waveform in the sound editor.** Drag handles to set the start and
+  end, or nudge them with the arrow keys (Shift for a second at a time);
+  the number fields stay, and follow along. Click anywhere on the waveform
+  to play from there, or play just the selection, with a cursor that moves
+  as it plays. The waveform is drawn by the server with ffmpeg, so it works
+  for YouTube's WebM audio in browsers that cannot decode it themselves.
+- **Fade in and fade out**, up to five seconds each, drawn on the waveform
+  as the shape they give the sound.
+
 ## 0.8.0 - 2026-11-14
 
 ### Added

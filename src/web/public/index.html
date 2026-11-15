@@ -377,21 +377,47 @@
     </div>
 
     <div id="sound-edit" hidden>
-      <audio id="sound-source" controls preload="auto" style="width:100%"></audio>
+      <!-- Played by the buttons and the waveform; its own controls only appear
+           if the waveform cannot be drawn, so there is always some way to listen. -->
+      <audio id="sound-source" preload="auto" style="width:100%"></audio>
+
+      <div class="wave" id="wave">
+        <canvas id="wave-canvas" aria-hidden="true"></canvas>
+        <p class="wave-msg" id="wave-msg">Reading the waveform…</p>
+        <div class="wave-handle" id="wave-start" role="slider" tabindex="0" aria-label="Start of the clip"></div>
+        <div class="wave-handle" id="wave-end" role="slider" tabindex="0" aria-label="End of the clip"></div>
+      </div>
+      <div class="wave-bar">
+        <button type="button" class="btn small" id="wave-play-sel"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.4 2.8 12.6 8l-8.2 5.2V2.8Z"/></svg>Play selection</button>
+        <button type="button" class="btn small" id="wave-play-cursor"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.4 2.8 12.6 8l-8.2 5.2V2.8Z"/></svg>Play from <span id="wave-cursor-label">0.0s</span></button>
+        <button type="button" class="btn small" id="wave-stop"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1"/></svg>Stop</button>
+        <span class="hint">Click the waveform to play from there. Drag the handles, or use the arrow keys on them.</span>
+      </div>
+
       <div class="trim-row">
         <label class="field">
           <span>Start <span class="hint">seconds</span></span>
           <div class="search-row">
-            <input type="number" id="sound-start" min="0" step="0.1" value="0">
-            <button type="button" class="btn small" id="sound-mark-start" title="Use the current playback position">Here</button>
+            <input type="number" id="sound-start" min="0" step="0.01" value="0">
+            <button type="button" class="btn small" id="sound-mark-start" title="Start at the cursor">Here</button>
           </div>
         </label>
         <label class="field">
           <span>End <span class="hint">seconds</span></span>
           <div class="search-row">
-            <input type="number" id="sound-end" min="0" step="0.1">
-            <button type="button" class="btn small" id="sound-mark-end" title="Use the current playback position">Here</button>
+            <input type="number" id="sound-end" min="0" step="0.01">
+            <button type="button" class="btn small" id="sound-mark-end" title="End at the cursor">Here</button>
           </div>
+        </label>
+      </div>
+      <div class="trim-row">
+        <label class="field">
+          <span>Fade in <span class="hint">seconds</span></span>
+          <input type="number" id="sound-fade-in" min="0" max="5" step="0.1" value="0">
+        </label>
+        <label class="field">
+          <span>Fade out <span class="hint">seconds</span></span>
+          <input type="number" id="sound-fade-out" min="0" max="5" step="0.1" value="0">
         </label>
       </div>
       <p class="sub" id="sound-length"></p>

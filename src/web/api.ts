@@ -21,7 +21,7 @@ import { ALWAYS_SAFE_FRAMES, analyseGif } from "../media/analyse.ts";
 import type { GifAnalysis } from "../media/analyse.ts";
 import { fitToLimit } from "../media/transform.ts";
 import { Thumbnailer } from "../media/thumbnail.ts";
-import { centreCrop, probeDuration, renderAudio, renderGif } from "../media/edit.ts";
+import { audioPeaks, centreCrop, probeDuration, renderAudio, renderGif } from "../media/edit.ts";
 import type { Crop } from "../media/edit.ts";
 import { hasYtDlp, importLink, sniff } from "../media/remote.ts";
 import type { FreesoundSearch, GiphySearch } from "../media/search.ts";
@@ -765,9 +765,19 @@ export function createApi(deps: ApiDeps) {
       return { filename, hash, bytes: bytes.byteLength };
     },
 
+    /** What the sound editor draws: a staged sound's waveform. */
+    "GET /api/staging/peaks": async (_req, url) => {
+      const path = stagedPath(url.searchParams.get("id"));
+      await assertStaged(path);
+      const buckets = Math.min(Math.max(Number(url.searchParams.get("buckets")) || 800, 50), 4000);
+      return asBadRequest(() => audioPeaks(path, buckets));
+    },
+
     /** Trim and normalise a staged sound into a staged MP3, for preview. */
     "POST /api/ringtones/render": async (req) => {
-      const body = await readJson<{ id?: string; start?: number; end?: number; normalise?: boolean }>(req);
+      const body = await readJson<{
+        id?: string; start?: number; end?: number; normalise?: boolean; fadeIn?: number; fadeOut?: number;
+      }>(req);
       const input = stagedPath(body.id);
       await assertStaged(input);
       const { id, path } = await staging.reserve("mp3");
@@ -776,6 +786,8 @@ export function createApi(deps: ApiDeps) {
           start: body.start === undefined ? undefined : Number(body.start),
           end: body.end === undefined ? undefined : Number(body.end),
           normalise: body.normalise !== false,
+          fadeIn: Number(body.fadeIn) || 0,
+          fadeOut: Number(body.fadeOut) || 0,
         }),
       );
       return { id, ...result };

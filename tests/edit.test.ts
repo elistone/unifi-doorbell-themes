@@ -2,7 +2,9 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { ALWAYS_SAFE_FRAMES } from "../src/media/analyse.ts";
 import {
+  MAX_FADE_SECONDS,
   audioEditArgs,
+  peaksOf,
   centreCrop,
   clampCrop,
   clampWindow,
@@ -104,5 +106,46 @@ describe("audio arguments", () => {
   it("leaves the level alone when asked to", () => {
     const filters = filterOf(audioEditArgs("in.mp3", "out.mp3", { normalise: false }, 5), "-af");
     assert.ok(!filters.includes("loudnorm"), filters);
+  });
+});
+
+describe("fades", () => {
+  const filters = (edit: object) => filterOf(audioEditArgs("in.mp3", "out.mp3", { start: 0, end: 10, ...edit }, 30), "-af");
+
+  it("fades in and out over what was asked", () => {
+    const f = filters({ fadeIn: 1.5, fadeOut: 2 });
+    assert.ok(f.includes("afade=t=in:st=0:d=1.500"), f);
+    assert.ok(f.includes("afade=t=out:st=8.000:d=2.000"), f);
+  });
+
+  it("keeps the click-stopping edge when no fade is asked for", () => {
+    assert.ok(filters({ fadeIn: 0 }).includes("afade=t=in:st=0:d=0.030"));
+  });
+
+  it("caps a fade, and never lets it outlast the clip", () => {
+    assert.ok(filters({ fadeIn: 60 }).includes(`afade=t=in:st=0:d=${MAX_FADE_SECONDS.toFixed(3)}`));
+    const short = filterOf(audioEditArgs("in.mp3", "out.mp3", { start: 0, end: 2, fadeOut: 4 }, 30), "-af");
+    assert.ok(short.includes("afade=t=out:st=0.000:d=2.000"), short);
+  });
+
+  it("treats nonsense as no fade rather than failing the render", () => {
+    assert.ok(filters({ fadeIn: "lots" }).includes("afade=t=in:st=0:d=0.030"));
+  });
+});
+
+describe("waveform peaks", () => {
+  it("gives the quietest and loudest sample of each slice", () => {
+    const samples = new Int16Array([0, 16384, -16384, 0, 32767, -32768, 0, 0]);
+    assert.deepEqual(peaksOf(samples, 2), [-0.5, 0.5, -1, 1]);
+  });
+
+  it("copes with more slices than samples", () => {
+    const peaks = peaksOf(new Int16Array([32767]), 4);
+    assert.equal(peaks.length, 8);
+    assert.ok(peaks.every((v) => Number.isFinite(v)));
+  });
+
+  it("returns nothing for silence of no length", () => {
+    assert.deepEqual(peaksOf(new Int16Array(0), 10), []);
   });
 });
