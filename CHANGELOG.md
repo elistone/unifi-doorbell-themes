@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.14.0 - 2026-11-15
+
 ### Added
 
 - **A dashboard on the first page.** Beside each doorbell's current image,
