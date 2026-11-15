@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.9.0 - 2026-11-15
+
 ### Added
 
 - **A waveform in the sound editor.** Drag handles to set the start and
