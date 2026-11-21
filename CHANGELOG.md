@@ -5,6 +5,17 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Added
+
+- **Telegram notifications, set up from Settings.** Paste a bot token,
+  press Find my chat, and Doorman messages you about the new theme each
+  day (with the GIF and its ring sound), failures, recovery, refused
+  images, ring sound problems, the doorbell being changed outside Doorman,
+  and a stalled schedule. Each kind has its own switch, with a master
+  switch for the lot and a test button. A failure is sent once, not on
+  every five-minute retry. The token is write-only in the UI, and Telegram's
+  certificate is always checked even though Protect's is not.
+
 ### Fixed
 
 - **A GIF Protect cannot process no longer stalls the doorbell for a day.**

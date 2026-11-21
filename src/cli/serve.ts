@@ -17,6 +17,7 @@ import { FreesoundSearch, GiphySearch } from "../media/search.ts";
 import { SoundLibrary } from "../media/soundlib.ts";
 import { createRingtoneCache } from "../ringtones.ts";
 import { HttpNotifier } from "../notify.ts";
+import { TelegramNotifier } from "../telegram.ts";
 import { Store } from "../store/db.ts";
 import { VERSION } from "../version.ts";
 import { createHandler } from "../web/router.ts";
@@ -62,11 +63,19 @@ const priv =
     : undefined;
 
 
-const notifier = process.env.NOTIFY_URL
+const log = (message: string) => console.log(`[${new Date().toISOString()}] ${message}`);
+
+const webhook = process.env.NOTIFY_URL
   ? new HttpNotifier({ url: process.env.NOTIFY_URL, method: process.env.NOTIFY_METHOD })
   : undefined;
-
-const log = (message: string) => console.log(`[${new Date().toISOString()}] ${message}`);
+// Always built: whether it sends anything is a setting, read each time, so
+// switching it on in the UI needs no restart.
+const telegram = new TelegramNotifier({ store, source, log });
+const notifier = {
+  async send(event: Parameters<TelegramNotifier["send"]>[0]) {
+    await Promise.all([webhook?.send(event).catch(() => {}), telegram.send(event)]);
+  },
+};
 
 const protectVersion = await protect.assertSupportedVersion();
 log(
@@ -198,7 +207,8 @@ async function tick(): Promise<void> {
       failures++;
       const message = error instanceof Error ? error.message : String(error);
       log(`${target.name}: roll failed: ${message}`);
-      await notifier?.post("down", `${target.name}: roll failed: ${message}`).catch(() => {});
+      await webhook?.post("down", `${target.name}: roll failed: ${message}`).catch(() => {});
+      await telegram.rollFailed(target.id, target.name, message);
     }
   }
 
@@ -219,7 +229,8 @@ async function checkForStall(): Promise<void> {
   const hoursSince = (Date.now() - new Date(last.at).getTime()) / 3_600_000;
   if (hoursSince > 25) {
     log(`WARNING: nothing applied for ${Math.floor(hoursSince)} hours`);
-    await notifier?.post("down", `no theme applied for ${Math.floor(hoursSince)} hours`).catch(() => {});
+    await webhook?.post("down", `no theme applied for ${Math.floor(hoursSince)} hours`).catch(() => {});
+    await telegram.stalled(Math.floor(hoursSince), last.at);
   }
 }
 

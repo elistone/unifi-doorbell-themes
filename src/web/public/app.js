@@ -1032,6 +1032,7 @@ async function renderSettings() {
     : "";
 
   wireDeviceButtons();
+  await renderNotifications();
 }
 
 function wireDeviceButtons() {
@@ -1148,6 +1149,130 @@ $("#roll-hour").addEventListener("change", (e) =>
 );
 $("#default-ringtone").addEventListener("change", (e) =>
   saveSetting({ defaultRingtone: e.target.value }, "Default ring sound saved."),
+);
+
+// ------------------------------------------------------- notifications
+
+let notify = null;
+
+async function saveNotify(patch, note) {
+  try {
+    notify = await api("/api/notifications", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      // Where this page lives, so messages can link back to it.
+      body: JSON.stringify({ ...patch, baseUrl: location.origin }),
+    });
+    if (note) toast(note, "ok");
+    drawNotifications();
+    return true;
+  } catch (error) {
+    toast(error.message, "bad");
+    return false;
+  }
+}
+
+async function renderNotifications() {
+  notify = await load("/api/notifications", "settings");
+  drawNotifications();
+}
+
+function drawNotifications() {
+  const t = notify.telegram;
+  const ready = t.tokenSet && t.chatId;
+  $("#tg-enabled").checked = t.enabled;
+  $("#tg-status").className = `badge ${t.enabled && ready ? "ok" : t.enabled ? "warn" : "mute"}`;
+  $("#tg-status").textContent = t.enabled && ready ? "on" : t.enabled ? "needs setting up" : "off";
+  $("#tg-body").classList.toggle("opacity-60", !t.enabled);
+
+  // The token never comes back; say whether there is one instead.
+  $("#tg-token").value = "";
+  $("#tg-token").placeholder = t.tokenSet ? "•••••••• saved — paste a new one to replace it" : "123456:ABC-DEF…";
+  $("#tg-token-hint").textContent =
+    t.tokenSource === "environment" ? "— from the deployment's configuration" : t.tokenSet ? "— saved" : "";
+  if (document.activeElement !== $("#tg-chat")) $("#tg-chat").value = t.chatId ?? "";
+  $("#tg-chat-hint").textContent = t.chatSource === "environment" ? "— from the deployment's configuration" : "";
+  $("#tg-test").disabled = !ready;
+
+  $("#tg-events").innerHTML = notify.kinds
+    .map(
+      (k) => `
+      <label class="choice !py-2.5">
+        <input type="checkbox" data-alert="${esc(k.key)}" ${t.events[k.key] ? "checked" : ""} class="size-4 accent-[var(--accent)]">
+        <span class="min-w-0"><span class="block text-sm font-semibold">${esc(k.label)}</span><span class="block text-[12.5px] text-dim">${esc(k.description)}</span></span>
+      </label>`,
+    )
+    .join("");
+}
+
+$("#tg-enabled").addEventListener("change", async (e) => {
+  const on = e.target.checked;
+  if (!(await saveNotify({ enabled: on }, on ? "Telegram notifications are on." : "Telegram notifications are off."))) {
+    e.target.checked = !on;
+  }
+});
+
+$("#tg-events").addEventListener("change", (e) => {
+  const key = e.target.dataset.alert;
+  if (!key) return;
+  const label = notify.kinds.find((k) => k.key === key)?.label ?? key;
+  void saveNotify({ events: { [key]: e.target.checked } }, `${label}: ${e.target.checked ? "on" : "off"}.`);
+});
+
+$("#tg-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  withBusy($("#tg-save"), async () => {
+    const patch = { chatId: $("#tg-chat").value.trim() };
+    if ($("#tg-token").value.trim()) patch.token = $("#tg-token").value.trim();
+    // Filling it in is a clear sign of wanting it on.
+    if (!notify.telegram.enabled && (patch.token || notify.telegram.tokenSet) && patch.chatId) patch.enabled = true;
+    await saveNotify(patch, "Saved.");
+  });
+});
+
+$("#tg-find").addEventListener("click", (e) =>
+  withBusy(e.currentTarget, async () => {
+    const { chats } = await api("/api/notifications/chats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: $("#tg-token").value.trim() || undefined }),
+    });
+    const box = $("#tg-chats");
+    if (!chats.length) {
+      box.hidden = false;
+      box.innerHTML = `<div class="rounded-xl bg-surface-2 p-3 text-[13px] text-dim">No chats yet. Send your bot a message in Telegram, then try again.</div>`;
+      return;
+    }
+    if (chats.length === 1) {
+      $("#tg-chat").value = chats[0].id;
+      box.hidden = true;
+      toast(`Found ${chats[0].name}. Press Save to use it.`, "ok");
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = chats
+      .map(
+        (c) => `<button type="button" class="choice text-left" data-chat="${esc(c.id)}">
+          <span class="min-w-0"><span class="block text-sm font-semibold">${esc(c.name)}</span><span class="block font-mono text-xs text-faint">${esc(c.type)} · ${esc(c.id)}</span></span>
+        </button>`,
+      )
+      .join("");
+  }),
+);
+
+$("#tg-chats").addEventListener("click", (e) => {
+  const pick = e.target.closest("[data-chat]");
+  if (!pick) return;
+  $("#tg-chat").value = pick.dataset.chat;
+  $("#tg-chats").hidden = true;
+  toast("Chat chosen. Press Save to use it.", "ok");
+});
+
+$("#tg-test").addEventListener("click", (e) =>
+  withBusy(e.currentTarget, async () => {
+    await api("/api/notifications/test", { method: "POST" });
+    toast("Sent — check Telegram.", "ok");
+  }),
 );
 
 // --------------------------------------------------------------- dark mode

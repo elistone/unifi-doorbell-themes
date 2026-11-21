@@ -439,6 +439,33 @@ describe("deleting a ring sound on the Sounds tab", () => {
   });
 });
 
+describe("notifications", () => {
+  const put = (body: unknown) => api.routes["PUT /api/notifications"](withJson(body), url("/api/notifications"));
+
+  it("never hands the bot token back", async () => {
+    const out = (await put({ token: "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ", chatId: "42", enabled: true })) as {
+      telegram: Record<string, unknown>;
+    };
+    assert.equal(out.telegram.tokenSet, true);
+    assert.equal(out.telegram.enabled, true);
+    assert.ok(!JSON.stringify(out).includes("ABCDEFGHIJ"));
+  });
+
+  it("refuses something that is not a token or a chat id", async () => {
+    await assert.rejects(() => put({ token: "hunter2" }), /does not look like a bot token/);
+    await assert.rejects(() => put({ chatId: "my phone" }), /chat id is a number/);
+  });
+
+  it("switches single kinds on and off without touching the rest", async () => {
+    const out = (await put({ events: { changed: false, bogus: true } })) as {
+      telegram: { events: Record<string, boolean> };
+    };
+    assert.equal(out.telegram.events.changed, false);
+    assert.equal(out.telegram.events.failed, true);
+    assert.equal("bogus" in out.telegram.events, false);
+  });
+});
+
 describe("Apply now", () => {
   it("puts a library sound on the doorbell, as the 04:00 roll does", async () => {
     // The button once called apply() without the ring sound cache, so a

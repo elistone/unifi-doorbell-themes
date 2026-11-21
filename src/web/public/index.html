@@ -372,6 +372,50 @@
         <p class="sub mt-3 !text-[13px]" id="settings-source"></p>
       </div>
     </div>
+
+    <div class="card mt-5" id="notify-card">
+      <div class="row">
+        <div class="grid size-11 shrink-0 place-items-center rounded-2xl bg-brand text-white">
+          <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="m14.2 2.2-12.4 5 4.3 1.6 1.6 4.4 2-2.6 3 2.2 1.5-10.6Z"/><path d="m6.1 8.8 5.6-4"/></svg>
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="card-title">Telegram notifications</div>
+          <div class="card-sub">Hear about the doorbell on your phone, without opening this page.</div>
+        </div>
+        <span class="badge mute" id="tg-status"></span>
+        <label class="switch" title="Send notifications"><input type="checkbox" id="tg-enabled" aria-label="Send Telegram notifications"></label>
+      </div>
+
+      <div class="mt-5 grid gap-6 lg:grid-cols-2" id="tg-body">
+        <form id="tg-form" autocomplete="off">
+          <ol class="mb-4 list-decimal space-y-1 pl-5 text-[13px] text-dim">
+            <li>In Telegram, message <b>@BotFather</b>, send <code>/newbot</code>, and paste the token it gives you below.</li>
+            <li>Send your new bot any message (or add it to a group), then press <b>Find my chat</b>.</li>
+          </ol>
+          <label class="field">
+            <span>Bot token <span class="hint" id="tg-token-hint"></span></span>
+            <input type="password" id="tg-token" spellcheck="false" autocomplete="off" placeholder="123456:ABC-DEF…">
+          </label>
+          <label class="field">
+            <span>Chat <span class="hint" id="tg-chat-hint"></span></span>
+            <div class="flex gap-2">
+              <input type="text" id="tg-chat" class="min-w-0 flex-1" spellcheck="false" placeholder="Chat id">
+              <button type="button" class="btn" id="tg-find">Find my chat</button>
+            </div>
+          </label>
+          <div id="tg-chats" class="mb-4 grid gap-2" hidden></div>
+          <div class="flex flex-wrap gap-2">
+            <button type="submit" class="btn primary" id="tg-save">Save</button>
+            <button type="button" class="btn" id="tg-test">Send a test</button>
+          </div>
+        </form>
+
+        <div>
+          <div class="mb-2 text-[13px] font-semibold text-dim">Tell me about</div>
+          <div class="grid gap-2" id="tg-events"></div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- --------------------------------------------------------- History -->

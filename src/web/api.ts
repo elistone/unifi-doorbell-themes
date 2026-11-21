@@ -14,6 +14,13 @@ import { copyFile, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { apply, hashBytes, reconcile, schedulableThemes } from "../apply.ts";
+import {
+  ALERT_KINDS,
+  createTelegramClient,
+  saveTelegramSettings,
+  telegramSettings,
+} from "../telegram.ts";
+import type { AlertKind, TelegramApi } from "../telegram.ts";
 import type { AssetSource, ImageDevice, SoundDevice } from "../apply.ts";
 import { decide } from "../domain/decide.ts";
 import type { Device, Rule, Theme } from "../domain/types.ts";
@@ -86,6 +93,8 @@ export interface ApiDeps {
   env?: { rollHour?: number; defaultRingtone?: string };
   /** Injected so the daemon's own roll bookkeeping stays in one place. */
   onApplied?: (date: string) => void;
+  /** The Telegram Bot API, swappable so tests need no network. */
+  telegram?: (token: string) => TelegramApi;
 }
 
 /** Set by the router before a route runs, for routes that need the caller. */
@@ -327,6 +336,13 @@ export function createApi(deps: ApiDeps) {
         soundMissing: soundMissing(theme.sound),
       };
     });
+  }
+
+  const telegramClient = deps.telegram ?? createTelegramClient;
+
+  function notificationsPayload() {
+    const { token, ...settings } = telegramSettings(store);
+    return { telegram: { ...settings, tokenSet: Boolean(token) }, kinds: ALERT_KINDS };
   }
 
   const routes: Record<string, (req: IncomingMessage, url: URL) => Promise<unknown>> = {
@@ -1282,6 +1298,87 @@ export function createApi(deps: ApiDeps) {
       }
 
       return settingsPayload();
+    },
+
+    // -------------------------------------------------------- notifications
+
+    "GET /api/notifications": async () => notificationsPayload(),
+
+    /**
+     * The token is write-only: it can be set, replaced or cleared here, and
+     * the payload only ever says whether there is one.
+     */
+    "PUT /api/notifications": async (req) => {
+      const body = await readJson<{
+        enabled?: unknown;
+        chatId?: unknown;
+        token?: unknown;
+        events?: unknown;
+        baseUrl?: unknown;
+      }>(req);
+      if (body.token !== undefined) {
+        const token = typeof body.token === "string" ? body.token.trim() : "";
+        if (!token) store.clearSetting("telegram.token");
+        else if (!/^\d+:[\w-]{20,}$/.test(token)) {
+          throw new HttpError(400, "That does not look like a bot token. BotFather gives one like 123456:ABC-DEF…");
+        } else store.setSetting("telegram.token", token);
+      }
+      const chatId = body.chatId === undefined ? undefined : String(body.chatId ?? "").trim();
+      if (chatId && !/^-?\d+$|^@\w{5,}$/.test(chatId)) {
+        throw new HttpError(400, "A chat id is a number (negative for groups), or @channelname.");
+      }
+      let baseUrl: string | null | undefined;
+      if (body.baseUrl !== undefined) {
+        baseUrl = typeof body.baseUrl === "string" && /^https?:\/\/[^\s"<>]+$/.test(body.baseUrl) ? body.baseUrl : null;
+      }
+      let events: Partial<Record<AlertKind, boolean>> | undefined;
+      if (body.events !== undefined) {
+        if (typeof body.events !== "object" || body.events === null) throw new HttpError(400, "events is an object.");
+        events = {};
+        for (const kind of ALERT_KINDS) {
+          const value = (body.events as Record<string, unknown>)[kind.key];
+          if (value !== undefined) events[kind.key] = Boolean(value);
+        }
+      }
+      saveTelegramSettings(store, {
+        enabled: body.enabled === undefined ? undefined : Boolean(body.enabled),
+        chatId,
+        events,
+        baseUrl,
+      });
+      return notificationsPayload();
+    },
+
+    "POST /api/notifications/test": async () => {
+      const settings = telegramSettings(store);
+      if (!settings.token || !settings.chatId) {
+        throw new HttpError(400, "Save a bot token and a chat first.");
+      }
+      try {
+        await telegramClient(settings.token).sendMessage(
+          settings.chatId,
+          "🔔 <b>Doorman</b> can reach you here. You will hear about the doorbell in this chat.",
+        );
+      } catch (error) {
+        throw new HttpError(502, (error as Error).message);
+      }
+      return { sent: true };
+    },
+
+    /**
+     * Chats that have messaged the bot lately, so nobody has to dig a chat
+     * id out of a JSON response. Takes a token not yet saved, so this works
+     * before the first save.
+     */
+    "POST /api/notifications/chats": async (req) => {
+      const body = await readJson<{ token?: string }>(req);
+      const token = body.token?.trim() || telegramSettings(store).token;
+      if (!token) throw new HttpError(400, "Enter the bot token first.");
+      try {
+        return { chats: await telegramClient(token).recentChats() };
+      } catch (error) {
+        throw new HttpError(502, (error as Error).message);
+      }
     },
 
     "GET /api/selection": async () => ({ selection: store.selection() }),

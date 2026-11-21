@@ -265,6 +265,8 @@ Everything is an environment variable. Only the first three are required.
 | `DOORMAN_SECURE_COOKIES` | `false` | Set `true` when something in front terminates TLS. |
 | `NOTIFY_URL` | — | Pinged on apply, failure and stall. `{status}` and `{msg}` are substituted. |
 | `NOTIFY_METHOD` | `POST` | |
+| `TELEGRAM_BOT_TOKEN` | — | Optional default for Telegram notifications; Settings overrides it. |
+| `TELEGRAM_CHAT_ID` | — | With the token, turns Telegram on unless switched off in Settings. |
 | `PROTECT_INSECURE_TLS` | `true` | Consoles ship a self-signed certificate. Set `false` if yours has a real one. |
 | `GIPHY_API_KEY` | — | Turns on GIF search. See [Finding GIFs and sounds](#finding-gifs-and-sounds-without-leaving-the-app). |
 | `FREESOUND_API_KEY` | — | Turns on ring-sound search. |

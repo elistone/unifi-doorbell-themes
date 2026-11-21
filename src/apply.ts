@@ -97,6 +97,8 @@ export interface ApplyResult {
   assetName: string | null;
   /** The ringtone that was set, when the theme names one. */
   ringtoneId?: string | null;
+  /** Whether the image was put up this run, or was already showing. */
+  image?: "applied" | "unchanged";
   /** Whether the sound half actually changed, was already right, or was skipped. */
   sound?: "applied" | "unchanged" | "skipped" | "failed";
   /**
@@ -379,6 +381,7 @@ async function applyOnce(
         themeId: theme.id,
         themeName: theme.name,
         assetName,
+        image: "unchanged",
         ringtoneId: wantedSound ?? null,
         sound: soundOutcome,
         drift,
@@ -413,6 +416,7 @@ async function applyOnce(
       themeId: theme.id,
       themeName: theme.name,
       assetName,
+      image: "applied",
       ringtoneId: wantedSound ?? null,
       sound: soundOutcome,
       drift,
