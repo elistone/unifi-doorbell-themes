@@ -5,6 +5,8 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+## 0.15.0 - 2026-11-21
+
 ### Added
 
 - **Telegram notifications, set up from Settings.** Paste a bot token,
