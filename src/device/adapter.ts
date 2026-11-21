@@ -1,8 +1,10 @@
 import { readFile, readdir } from "node:fs/promises";
 import { FileHashes } from "../media/hashes.ts";
 import { extname, join } from "node:path";
+import { ImageRefusedError } from "../apply.ts";
 import type { AssetSource, ImageDevice, SoundDevice } from "../apply.ts";
 import type { PrivateApi } from "./private.ts";
+import { isProcessingRefusal } from "./protect.ts";
 import type { Protect } from "./protect.ts";
 
 /**
@@ -102,8 +104,16 @@ export class DirectoryAssetSource implements AssetSource {
   }
 
   async upload(bytes: Uint8Array, filename: string, mimeType: string) {
-    const asset = await this.#protect.uploadAnimation(bytes, filename, mimeType);
-    return { name: asset.name, size: asset.size };
+    try {
+      const asset = await this.#protect.uploadAnimation(bytes, filename, mimeType);
+      return { name: asset.name, size: asset.size };
+    } catch (error) {
+      if (!isProcessingRefusal(error)) throw error;
+      throw new ImageRefusedError(
+        `Protect could not process ${filename} - most likely too many frames for its 1MB limit ` +
+          `once converted. Fit it on the Images page to make a copy that will go up`,
+      );
+    }
   }
 
   async listRemote(): Promise<Array<{ name: string; originalName: string }>> {

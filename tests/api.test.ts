@@ -202,6 +202,33 @@ describe("calendar", () => {
     assert.equal(days[0].filename, "stitch.gif");
   });
 
+  it("skips a theme whose image Protect refused, as the scheduler will", async () => {
+    store.upsertTheme({
+      id: "xmas", name: "Christmas", image: "hash-xmas", priority: 10,
+      enabled: true, rules: [{}], devices: [],
+    });
+    store.upsertTheme({
+      id: "everyday", name: "Everyday", image: "hash-everyday", priority: 0,
+      enabled: true, rules: [{}], devices: [],
+    });
+    store.markRefused({ hash: "hash-xmas", filename: "elf.gif", reason: "too big", refusedAt: "2026-11-21T05:00:00Z" });
+
+    const calendar = async () =>
+      ((await api.routes["GET /api/calendar"](
+        undefined as never,
+        url("/api/calendar?from=2026-06-01&days=1"),
+      )) as { days: Array<{ themeId: string | null }> }).days[0].themeId;
+    assert.equal(await calendar(), "everyday");
+
+    // Try again puts it back.
+    const cleared = (await api.routes["DELETE /api/media/refused"](
+      undefined as never,
+      url("/api/media/refused?filename=elf.gif"),
+    )) as { cleared: boolean };
+    assert.equal(cleared.cleared, true);
+    assert.equal(await calendar(), "xmas");
+  });
+
   it("rejects a date it cannot parse rather than silently starting today", async () => {
     await assert.rejects(
       () => api.routes["GET /api/calendar"](undefined as never, url("/api/calendar?from=soon")),

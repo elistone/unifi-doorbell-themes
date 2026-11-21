@@ -1248,6 +1248,7 @@ function drawThemes() {
               <div class="flex flex-wrap gap-1.5 pt-1">
                 ${theme.priority > 0 ? `<span class="badge accent">priority ${theme.priority}</span>` : ""}
                 ${theme.missing ? `<span class="badge bad">image missing</span>` : ""}
+                ${theme.refused ? `<span class="badge bad" title="Protect could not process its image, so the scheduler skips it. See Images.">set aside</span>` : ""}
               </div>
             </div>
             <label class="switch" title="${theme.enabled ? "Enabled" : "Disabled"}"><input type="checkbox" data-toggle-theme="${esc(theme.id)}" ${theme.enabled ? "checked" : ""} aria-label="Enabled"></label>
@@ -1521,7 +1522,7 @@ function drawMedia() {
     .filter((m) =>
       mediaView.filter === "used" ? m.inUse
       : mediaView.filter === "unused" ? !m.inUse
-      : mediaView.filter === "problem" ? m.verdict !== "safe"
+      : mediaView.filter === "problem" ? m.verdict !== "safe" || m.refused
       : true,
     )
     .filter((m) => !text || m.filename.toLowerCase().includes(text));
@@ -1550,13 +1551,18 @@ function drawMedia() {
         <div class="flex flex-1 flex-col gap-2 p-3">
           <div class="truncate text-[13px] font-semibold" title="${esc(m.filename)}">${esc(m.filename)}</div>
           <div class="facts">
-            <span class="badge ${kind}">${esc(label)}</span>
+            ${m.refused
+              ? `<span class="badge bad" title="Protect could not process it, so the scheduler skips it">Protect refused</span>`
+              : `<span class="badge ${kind}">${esc(label)}</span>`}
             ${m.frames ? `<span>${m.frames} frames</span>` : ""}
             <span>${kb(m.bytes)}</span>
           </div>
-          ${m.verdict && m.verdict !== "safe" ? `<div class="text-[11.5px] text-dim">${esc(m.advice ?? "")}</div>` : ""}
+          ${m.refused
+            ? `<div class="text-[11.5px] text-dim">Protect would not take it on ${esc(new Date(m.refused.at).toLocaleDateString())}, so themes using it are skipped. Shrink makes a copy with fewer frames.</div>`
+            : m.verdict && m.verdict !== "safe" ? `<div class="text-[11.5px] text-dim">${esc(m.advice ?? "")}</div>` : ""}
           <div class="mt-auto flex flex-wrap gap-1.5 pt-1">
-            ${m.verdict === "likely-fails" ? `<button class="btn small" data-fit="${esc(m.filename)}">${icon("shrink")}Shrink</button>` : ""}
+            ${m.verdict === "likely-fails" || m.refused ? `<button class="btn small" data-fit="${esc(m.filename)}">${icon("shrink")}Shrink</button>` : ""}
+            ${m.refused ? `<button class="btn small" data-unrefuse="${esc(m.filename)}" title="Let the scheduler try uploading it again">Try again</button>` : ""}
             <button class="btn small" data-crop="${esc(m.filename)}" title="Crop and trim into a new copy">${icon("crop")}Crop</button>
             <div class="spacer"></div>
             <button class="btn small danger icon" data-del-media="${esc(m.filename)}" aria-label="Delete" ${m.inUse ? "disabled title='Used by a theme'" : "title='Delete'"}>${icon("trash")}</button>
@@ -1581,6 +1587,16 @@ function drawMedia() {
   $$("[data-crop]").forEach((b) =>
     b.addEventListener("click", (e) =>
       withBusy(e.currentTarget, () => cropFromLibrary(b.dataset.crop)),
+    ),
+  );
+
+  $$("[data-unrefuse]").forEach((b) =>
+    b.addEventListener("click", (e) =>
+      withBusy(e.currentTarget, async () => {
+        await api(`/api/media/refused?filename=${encodeURIComponent(b.dataset.unrefuse)}`, { method: "DELETE" });
+        toast("It is back in the rotation. If Protect refuses it again, it is set aside again.", "ok");
+        await renderMedia();
+      }),
     ),
   );
 

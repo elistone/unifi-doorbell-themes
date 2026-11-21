@@ -64,6 +64,19 @@ const SCHEMA = `
     uploaded_at   TEXT NOT NULL
   );
 
+  -- Images Protect would not take. The controller turns an upload into a
+  -- sprite sheet and refuses it when that comes out too big, which no check
+  -- here can predict exactly. Remembered so the scheduler stops picking the
+  -- same doomed GIF every five minutes and shows something else instead.
+  -- Cleared by hand from the Images page; a fitted copy is new bytes, so it
+  -- has a new hash and starts with a clean slate anyway.
+  CREATE TABLE IF NOT EXISTS refused_images (
+    hash       TEXT PRIMARY KEY,
+    filename   TEXT NOT NULL,
+    reason     TEXT NOT NULL,
+    refused_at TEXT NOT NULL
+  );
+
   -- The ring sound manifest. Library sound hash -> the ringtone the
   -- controller gave back for it.
   --
@@ -123,6 +136,13 @@ export interface AssetRecord {
   originalName: string;
   size: number | null;
   uploadedAt: string;
+}
+
+export interface RefusedImage {
+  hash: string;
+  filename: string;
+  reason: string;
+  refusedAt: string;
 }
 
 export interface RingtoneRecord {
@@ -349,6 +369,37 @@ export class Store {
       }
     }
     return dropped;
+  }
+
+  // ------------------------------------------------------- refused images
+
+  refusedImages(): Map<string, RefusedImage> {
+    const rows = this.#db.prepare("SELECT * FROM refused_images").all() as Array<Record<string, unknown>>;
+    return new Map(
+      rows.map((row) => [
+        String(row.hash),
+        {
+          hash: String(row.hash),
+          filename: String(row.filename),
+          reason: String(row.reason),
+          refusedAt: String(row.refused_at),
+        },
+      ]),
+    );
+  }
+
+  markRefused(record: RefusedImage): void {
+    this.#db
+      .prepare(
+        `INSERT INTO refused_images (hash, filename, reason, refused_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(hash) DO UPDATE SET filename = excluded.filename, reason = excluded.reason,
+           refused_at = excluded.refused_at`,
+      )
+      .run(record.hash, record.filename, record.reason, record.refusedAt);
+  }
+
+  clearRefused(hash: string): boolean {
+    return Number(this.#db.prepare("DELETE FROM refused_images WHERE hash = ?").run(hash).changes) > 0;
   }
 
   // ------------------------------------------------------------ ringtones

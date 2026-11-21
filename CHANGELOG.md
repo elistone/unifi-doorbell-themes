@@ -5,6 +5,16 @@ repo is a tag from this file, not a commit SHA.
 
 ## Unreleased
 
+### Fixed
+
+- **A GIF Protect cannot process no longer stalls the doorbell for a day.**
+  Protect answers an image whose converted sprite is too big with a bare
+  500 ("Failed to process and persist files"), and the scheduler used to
+  retry that same GIF every five minutes until the next day's pick. Now the
+  image is set aside and another theme goes up in the same run. The Images
+  page marks it "Protect refused", with Shrink and Try again buttons, and its
+  themes show "set aside". The dashboard and calendar skip it too.
+
 ## 0.14.0 - 2026-11-15
 
 ### Added

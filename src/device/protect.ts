@@ -98,6 +98,27 @@ export class ProtectError extends Error {
   }
 }
 
+/**
+ * Whether an upload failed because of the image rather than the moment.
+ *
+ * Protect answers a sprite it cannot store with a bare 500 - the same status
+ * as a controller having a bad minute - so the status alone cannot tell
+ * them apart. The body can:
+ *
+ *   {"error":"Failed to process and persist files. File: /tmp/..., FileType: animations","name":"UNKNOWN_ERROR"}
+ *
+ * Observed on 7.3.74 for 73- and 98-frame GIFs, after about 25 seconds of
+ * processing. Anything else stays an ordinary failure and is retried.
+ */
+export function isProcessingRefusal(error: unknown): boolean {
+  return (
+    error instanceof ProtectError &&
+    ((error.status === 500 && /failed to process/i.test(error.body)) ||
+      error.status === 413 ||
+      error.status === 415)
+  );
+}
+
 export class Protect {
   readonly #base: string;
   readonly #apiKey: string;

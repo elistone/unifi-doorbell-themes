@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { beforeEach, describe, it } from "node:test";
-import { adopt, apply, ensureUploaded, reconcile } from "../src/apply.ts";
+import { ImageRefusedError, adopt, apply, ensureUploaded, reconcile } from "../src/apply.ts";
 import type { AssetSource, ImageDevice } from "../src/apply.ts";
 import { Store } from "../src/store/db.ts";
 import type { Theme } from "../src/domain/types.ts";
@@ -34,9 +34,12 @@ class FakeDevice implements ImageDevice {
 
 class FakeSource implements AssetSource {
   uploads = 0;
+  refusals = 0;
   remote = new Set<string>();
   files = new Map<string, { bytes: Uint8Array; filename: string; mimeType: string }>();
   rejectUpload: string | null = null;
+  /** Filenames the controller cannot process, every time. */
+  refuse = new Set<string>();
   #next = 0;
 
   add(hash: string, filename = `${hash}.gif`) {
@@ -48,6 +51,10 @@ class FakeSource implements AssetSource {
   }
 
   async upload(_bytes: Uint8Array, _filename: string, _mimeType: string) {
+    if (this.refuse.has(_filename)) {
+      this.refusals++;
+      throw new ImageRefusedError(`Protect could not process ${_filename}`);
+    }
     if (this.rejectUpload) {
       const message = this.rejectUpload;
       this.rejectUpload = null;
@@ -270,6 +277,66 @@ describe("failure", () => {
     const result = await apply(store, device, source, now, {}, notifier);
     assert.equal(result.outcome, "applied");
     assert.equal(device.showing, result.assetName);
+  });
+});
+
+describe("an image Protect refuses", () => {
+  // Protect turns an upload into a sprite and refuses it when that comes out
+  // over 1MB. Retrying the same bytes gets the same answer, so before this
+  // the doorbell failed every five minutes for the whole day.
+  beforeEach(() => {
+    store.setSelection("sequential");
+    source.add("a", "big.gif");
+    source.add("b", "small.gif");
+    store.upsertTheme(theme("a", "a"));
+    store.upsertTheme(theme("b", "b"));
+    source.refuse.add("big.gif");
+  });
+
+  it("is set aside, and another theme goes up in the same run", async () => {
+    const result = await apply(store, device, source, now);
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.themeId, "b");
+    assert.match(result.reason, /instead of a, which Protect refused/);
+    assert.equal(device.showing, result.assetName);
+
+    // Both halves of the story are in the history.
+    assert.deepEqual(
+      store.recentApplies(2).map((r) => `${r.themeId} ${r.outcome}`).sort(),
+      ["a failed", "b applied"],
+    );
+    assert.match(store.refusedImages().get("a")?.reason ?? "", /big\.gif/);
+  });
+
+  it("is not tried again on the next run", async () => {
+    await apply(store, device, source, now);
+    await apply(store, device, source, now);
+    assert.equal(source.refusals, 1);
+  });
+
+  it("leaves nothing to show when it was the only choice", async () => {
+    store.deleteTheme("b");
+    const result = await apply(store, device, source, now);
+    assert.equal(result.outcome, "no-theme");
+    assert.match(result.reason, /instead of a/);
+    assert.equal(device.writes, 0);
+  });
+
+  it("goes back in the rotation once cleared", async () => {
+    await apply(store, device, source, now);
+    store.clearRefused("a");
+    source.refuse.clear();
+    store.setCursor("default", {});
+    const result = await apply(store, device, source, now);
+    assert.equal(result.themeId, "a");
+  });
+
+  it("is not confused with an ordinary upload failure, which is retried", async () => {
+    source.refuse.clear();
+    source.rejectUpload = "POST /files/animations failed with 502";
+    const result = await apply(store, device, source, now);
+    assert.equal(result.outcome, "failed");
+    assert.equal(store.refusedImages().size, 0);
   });
 });
 

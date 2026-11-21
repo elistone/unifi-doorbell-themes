@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { decide } from "./domain/decide.ts";
-import type { Config } from "./domain/types.ts";
+import type { Config, Theme } from "./domain/types.ts";
 import type { Outcome, Store } from "./store/db.ts";
 import { isLibraryRef, libraryHash } from "./sounds.ts";
 
@@ -38,6 +38,23 @@ export interface ImageDevice {
 export interface SoundDevice {
   currentRingtone(): Promise<string | null>;
   setRingtone(ringtoneId: string): Promise<void>;
+}
+
+/**
+ * The controller took the upload but could not turn it into something it
+ * will show - in practice, a sprite sheet over its 1MB ceiling.
+ *
+ * Distinct from any other upload failure because it is about the image, not
+ * the moment: retrying the same bytes in five minutes gets the same answer,
+ * so the right move is to set the image aside and show something else.
+ * AssetSource.upload throws this; deciding which controller errors count is
+ * the adapter's job.
+ */
+export class ImageRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ImageRefusedError";
+  }
 }
 
 /** Where media comes from, and how it reaches the NVR. */
@@ -92,6 +109,21 @@ export interface ApplyResult {
    */
   drift?: { expected: string | null; found: string | null };
   error?: string;
+  /** Set when this run failed because the controller refused the image. */
+  refused?: boolean;
+}
+
+/**
+ * The themes the scheduler may pick from: everything for this doorbell
+ * except those whose image the controller has refused.
+ *
+ * Shared by apply, the dashboard and the calendar, so the "up next" and the
+ * month ahead predict what will really be shown rather than a GIF that is
+ * going to be skipped.
+ */
+export function schedulableThemes(store: Store, deviceId?: string): Theme[] {
+  const refused = store.refusedImages();
+  return (deviceId ? store.themesFor(deviceId) : store.themes()).filter((t) => !refused.has(t.image));
 }
 
 export interface ApplyOptions {
@@ -212,6 +244,31 @@ export async function apply(
   notifier?: Notifier,
   sound?: SoundDevice,
 ): Promise<ApplyResult> {
+  // A refused image is set aside by ensureUploaded, so deciding again picks
+  // from what is left. Each round removes a theme, so this ends - with a
+  // theme that worked, or with nothing eligible. Each refusal keeps its own
+  // audit row; the final result says what it stood in for.
+  const refused: string[] = [];
+  for (;;) {
+    const result = await applyOnce(store, device, source, now, options, notifier, sound);
+    if (!result.refused) {
+      return refused.length
+        ? { ...result, reason: `${result.reason}; instead of ${refused.join(", ")}, which Protect refused` }
+        : result;
+    }
+    refused.push(result.themeName ?? result.themeId ?? "a theme");
+  }
+}
+
+async function applyOnce(
+  store: Store,
+  device: ImageDevice,
+  source: AssetSource,
+  now: Date,
+  options: ApplyOptions,
+  notifier?: Notifier,
+  sound?: SoundDevice,
+): Promise<ApplyResult> {
   // Which doorbell this is. Every piece of per-run state - the rotation
   // cursor, what was last set, the audit row - is keyed by it, so two
   // doorbells never read each other's position or report each other's
@@ -243,7 +300,7 @@ export async function apply(
   // Scoped to this doorbell. A theme listing no devices applies to all of
   // them, so a single-doorbell setup sees exactly what it always did.
   const config: Config = {
-    themes: options.deviceId ? store.themesFor(options.deviceId) : store.themes(),
+    themes: schedulableThemes(store, options.deviceId),
     selection: store.selection(),
   };
   const decision = decide(config, now, store.cursor(deviceId), deviceId);
@@ -369,6 +426,7 @@ export async function apply(
       themeName: theme.name,
       assetName: null,
       error: message,
+      refused: error instanceof ImageRefusedError,
     });
   }
 }
@@ -395,7 +453,20 @@ export async function ensureUploaded(
     throw new Error(`media ${hash.slice(0, 12)} is missing from the library`);
   }
 
-  const uploaded = await source.upload(file.bytes, file.filename, file.mimeType);
+  let uploaded: { name: string; size: number };
+  try {
+    uploaded = await source.upload(file.bytes, file.filename, file.mimeType);
+  } catch (error) {
+    if (error instanceof ImageRefusedError) {
+      store.markRefused({
+        hash,
+        filename: file.filename,
+        reason: error.message,
+        refusedAt: new Date().toISOString(),
+      });
+    }
+    throw error;
+  }
   store.recordAsset({
     hash,
     assetName: uploaded.name,

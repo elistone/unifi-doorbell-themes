@@ -13,7 +13,7 @@
 import { copyFile, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { apply, hashBytes, reconcile } from "../apply.ts";
+import { apply, hashBytes, reconcile, schedulableThemes } from "../apply.ts";
 import type { AssetSource, ImageDevice, SoundDevice } from "../apply.ts";
 import { decide } from "../domain/decide.ts";
 import type { Device, Rule, Theme } from "../domain/types.ts";
@@ -314,12 +314,14 @@ export function createApi(deps: ApiDeps) {
     const soundMissing = (sound: string | undefined) =>
       !sound ? false : isLibraryRef(sound) ? !library.has(libraryHash(sound)) : Boolean(priv) && !live.has(sound);
 
+    const refused = store.refusedImages();
     return store.themes().map((theme) => {
       const filename = files.get(theme.image) ?? null;
       return {
         ...theme,
         filename,
         missing: filename === null,
+        refused: refused.has(theme.image),
         // Only meaningful when we could actually read the ringtone list;
         // no admin credentials must not look like every sound is broken.
         soundMissing: soundMissing(theme.sound),
@@ -351,7 +353,7 @@ export function createApi(deps: ApiDeps) {
           const showingAsset = showing ? byAsset.get(showing) : undefined;
 
           const decision = decide(
-            { themes: store.themesFor(d.id), selection: store.selection() },
+            { themes: schedulableThemes(store, d.id), selection: store.selection() },
             now,
             store.cursor(d.id),
             d.id,
@@ -539,6 +541,7 @@ export function createApi(deps: ApiDeps) {
     "GET /api/media": async () => {
       const files = await mediaIndex();
       const used = new Set(store.themes().map((t) => t.image));
+      const refused = store.refusedImages();
       const entries = await Promise.all(
         [...files.entries()].map(async ([hash, filename]) => {
           const path = join(mediaDir, filename);
@@ -558,6 +561,9 @@ export function createApi(deps: ApiDeps) {
             bytes,
             inUse: used.has(hash),
             uploaded: store.asset(hash)?.assetName ?? null,
+            refused: refused.has(hash)
+              ? { reason: refused.get(hash)!.reason, at: refused.get(hash)!.refusedAt }
+              : null,
             frames: analysis?.frames ?? null,
             verdict: analysis?.verdict ?? null,
             advice: analysis?.advice ?? analysisError,
@@ -603,6 +609,18 @@ export function createApi(deps: ApiDeps) {
       }
       await unlink(join(mediaDir, filename));
       return { removed: filename };
+    },
+
+    /**
+     * Let the scheduler try a refused image again - after Protect has been
+     * upgraded, say. If it is still too big, the next apply sets it aside
+     * once more and shows something else, so trying costs one bad upload.
+     */
+    "DELETE /api/media/refused": async (_req, url) => {
+      const filename = safeName(url.searchParams.get("filename") ?? "");
+      const hash = [...(await mediaIndex()).entries()].find(([, f]) => f === filename)?.[0];
+      if (!hash) throw new HttpError(404, `${filename} is not in the media library.`);
+      return { filename, cleared: store.clearRefused(hash) };
     },
 
     /**
@@ -1060,7 +1078,7 @@ export function createApi(deps: ApiDeps) {
       const start = url.searchParams.get("from") ?? todayLocal();
       const from = parseLocalDate(start);
       const target = resolveDevice(url);
-      const config = { themes: store.themesFor(target.id), selection: store.selection() };
+      const config = { themes: schedulableThemes(store, target.id), selection: store.selection() };
       const files = await mediaIndex();
 
       let cursor = store.cursor(target.id);
